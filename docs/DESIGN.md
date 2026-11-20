@@ -81,15 +81,20 @@
 - 在 M0 确定发送缓冲深度：SO_SNDBUF 设为 1 个包还是 N 个包。
 - **码率控制器**：输入 EAGAIN/stall、实测 goodput、队列深度；输出 LDAC 档位（990/660/492/396/330）。降档快、升档慢，失败过的档位指数退避。
 
-### 4.5 音频捕获
-- 自写 AudioServerPlugIn 驱动（不用 BlackHole，避免 GPL，也不需要麦克风权限）。
-- 环形缓冲：两端都用原子操作；写入时带 sample time，能检测断档和溢出；放在只有本用户可访问的位置。coreaudiod 沙盒里能用哪些机制，需要调研。
-- 通过 `kAudioDevicePropertyLatency` 上报真实延迟（抖动缓冲 + 环 + 耳机 delay report）。
-- 备选：Core Audio process tap（macOS 14.2+），省掉驱动，但需要"录制系统音频"权限。M2 时对比两种方案。
+### 4.5 音频捕获（M2 已实现）
+- 虚拟输出设备 "Fidelis"：`Driver/` 改编自 Sendspin for Mac 的驱动（Apache-2.0），基于 libASPL（MIT，submodule 固定在 v3.1.2）。不自写驱动：属性分发、音量和静音控件、采样率切换这些最容易漏的边界，交给成熟的库。BlackHole 和 Background Music 是 GPL，不用。
+- 驱动内部的环形缓冲按设备 sample time 索引，用 seqlock 防读到写一半的数据（RT 写端从不等待）。断档读出来是静音，时间线重启时换 session 编号。
+- IPC 不走共享文件：App 通过自定义设备属性 `'fdau'` 按 sample time 读音频，驱动用内核记录的代码签名（`csops`）核对调用方，只给 `dev.fidelis.app`。这样不碰 coreaudiod 沙盒，也没有 `/tmp` 下 0666 的文件（CodecBlue 的弱点）。注意：ad-hoc 签名的开发版只能按 identifier 核对，正式发布要用 Developer ID 签名，让驱动按 team 核对。
+- 音量和静音由 libASPL 默认的 `OnProcessMixedOutput` 直接乘到混音上（没有 AVRCP 绝对音量，耳机自己调不了），所以音量键可用。
+- 延迟：App 用自定义属性 `'fdlu'`（µs）告诉驱动，驱动报成输出流延迟。数值 = FIFO 目标 40 ms + 发送提前量 10 ms + 耳机延迟。耳机支持 AVDTP Delay Reporting 时用它报的值，否则按 150 ms 估算（EH500 不支持）。每次修改都会让设备 IO 重启一下，所以变化小于 20 ms 就不改。
+- App 侧（`SystemAudio.swift`）：一个静音 IOProc 让设备持续运行、时间线不断；每 5 ms 轮询 `'fdau'`，写入无锁 SPSC FIFO；媒体线程按 LDAC 节奏取走。先积到 40 ms 再出声；欠载时补静音并重新预充；积压超过目标 60 ms 就丢回目标值。
+- 全链路 Float32：libldac 支持 `LDACBT_SMPL_FMT_F32`，内部本身是浮点，所以不在 16 bit 截断。
+- 默认输出切换（`OutputRouter.swift`）：开始时（接管之前，因为耳机离开 macOS 后系统会自动切到扬声器）按 UID 记下当前输出，存进 UserDefaults；开始推流后切到 Fidelis；停止后等原设备重新出现（最多 12 s）再切回去。崩溃后下次启动也会恢复。
+- 驱动的采样率只开放 LDAC 的 44.1/48/88.2/96 kHz，并由 App 设成协商好的那个，所以中间不重采样。
 
 ### 4.6 漂移与重采样
-- PI 控制环跟踪环形缓冲深度，驱动高质量异步重采样器（如 speexdsp / libsamplerate，BSD 许可），把比例偏差控制在 ±0.5% 以内，听不出来。
-- 耳机 DAC 时钟的漂移由同一个环路吸收。
+- 不需要重采样器：libASPL 设备的时钟就是 host time × 标称采样率，MediaStreamer 也按 mach 时钟定节奏，两边同一个时钟，FIFO 水位保持稳定（实测 45 s 内 0 欠载、0 丢弃）。
+- 耳机 DAC 相对 Mac 时钟的漂移由耳机端自己吸收（A2DP 发射端本来就按自己的时钟发）。如果以后发现某些耳机缓冲会慢慢漂空或漂满，再在发送节奏上加一个很小的 PI 微调。
 
 ### 4.7 Supervisor（稳定性核心）
 显式状态机：
@@ -117,7 +122,7 @@
 |---|---|---|
 | **M0 可行性探针** | 只做 CLI：1) 两种 Transport 在本机能否拿到 0x19 的 fd；2) 用 LDAC 耳机跑 AVDTP 到 START；3) 洪泛测吞吐，覆盖不同 SDU 大小和 SNDBUF 深度，有无 AVRCP 占位；4) 查 N1 上有没有 LQM 的等价物 | 得到 N1 上可持续吞吐数据，选定 Transport 后端 |
 | M1 播放 WAV | CLI 把 WAV 文件以 LDAC 播放 10 分钟不中断；AVDTP 单元测试 + fuzz | 10 分钟零断流 |
-| M2 系统音频 | HAL 驱动 + 环 + 重采样；对比 process tap | 系统音频 1 小时零断流，延迟上报准确 |
+| M2 系统音频 | HAL 驱动（改编 Sendspin，基于 libASPL）+ FIFO；同一时钟，无需重采样 | 系统音频 1 小时零断流，延迟上报准确（已过 45 s 实测，长测待做） |
 | M3 稳定性 | Supervisor 状态机 + 故障注入：`killall bluetoothd`、睡眠唤醒、走出范围、来电、关蓝牙 | 每类故障 20 次全部自动恢复 |
 | M4 质量 | 码率控制器、AVRCP 音量/按键、delay report | 24 小时浸泡测试通过 |
 | M5 产品化 | 菜单栏 App、安装/卸载、签名公证、诊断导出 | 新机器 5 分钟内装好可用 |
@@ -162,5 +167,5 @@
 ## 11. 待决问题
 1. ~~测试用的 LDAC 耳机型号？~~ SIMGOT EH500（已确认支持 LDAC 44.1–96 kHz）。
 2. Transport 后端：等 M0 结果再定。
-3. 捕获方案：驱动还是 process tap，等 M2 对比后定。
+3. ~~捕获方案~~：已定为虚拟输出设备（驱动），见 §4.5。process tap 需要录屏/录音权限，而且拿不到音量键和延迟上报。
 4. 最低支持的 macOS 版本：建议只支持 macOS 27 起，按 build 号维护消息表。

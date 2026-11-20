@@ -6,7 +6,7 @@ import PackageDescription
 // clang with the CLT SDK.
 let package = Package(
     name: "Fidelis",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v15)],
     products: [
         .executable(name: "Fidelis", targets: ["FidelisApp"]),
     ],

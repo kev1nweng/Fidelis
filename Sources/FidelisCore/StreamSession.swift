@@ -47,12 +47,15 @@ public final class StreamSession {
     private let log: Log
     public var onPhase: ((Phase) -> Void)?
     public var onStats: ((MediaStreamer.Stats) -> Void)?
+    /// The headphones' own playback delay (AVDTP delay report), in microseconds.
+    public var onSinkDelay: ((Int) -> Void)?
     /// The session ended without stop() being called (link loss, write failure).
     public var onUnexpectedEnd: ((String) -> Void)?
 
     private var signaling: SignalingChannel?
     private var media: FDBTChannel?
     private var streamer: MediaStreamer?
+    private var source: AudioSource?
     private var seid: UInt8 = 0
     private var stopping = false
     public private(set) var negotiated: Negotiated?
@@ -105,7 +108,17 @@ public final class StreamSession {
         }
 
         let rate = negotiated?.sampleRate ?? preferredSampleRate
-        let s = MediaStreamer(fd: channel.fd, mtu: Int(channel.outMTU), source: makeSource(rate), mode: mode, log: log)
+        let src = makeSource(rate)
+        do {
+            try src.start()
+        } catch {
+            _ = try? await sig.send(.suspend, [seid << 2], timeout: 1.5)
+            _ = try? await sig.send(.close, [seid << 2], timeout: 1.5)
+            await teardown()
+            throw error
+        }
+        source = src
+        let s = MediaStreamer(fd: channel.fd, mtu: Int(channel.outMTU), source: src, mode: mode, log: log)
         s.onStats = { [weak self] st in Task { @MainActor in self?.onStats?(st) } }
         s.onEnd = { [weak self] reason in
             Task { @MainActor in
@@ -121,16 +134,19 @@ public final class StreamSession {
     private func negotiate(_ sig: SignalingChannel) async throws {
         let endpoints = try await sig.discover()
         var codecs: [String] = []
-        var chosen: (UInt8, LDACCodecInfo)?
+        var chosen: (UInt8, LDACCodecInfo, Bool)?
         for ep in endpoints where ep.isSink && ep.mediaType == 0 {
             let caps = try await sig.capabilities(of: ep.seid)
             if let c = caps.first(where: { $0.category == AVDTP.Capability.Category.mediaCodec.rawValue }) {
                 codecs.append(describeCodec(c))
             }
-            if chosen == nil, !ep.inUse, let ldac = LDACCodecInfo.find(in: caps) { chosen = (ep.seid, ldac) }
+            if chosen == nil, !ep.inUse, let ldac = LDACCodecInfo.find(in: caps) {
+                let delayReporting = caps.contains { $0.category == AVDTP.Capability.Category.delayReporting.rawValue }
+                chosen = (ep.seid, ldac, delayReporting)
+            }
         }
         log.info("sink endpoints: \(codecs.joined(separator: ", "))")
-        guard let (seid, offered) = chosen else { throw SessionError.noLDAC }
+        guard let (seid, offered, delayReporting) = chosen else { throw SessionError.noLDAC }
         let rates = offered.sampleRates.hertz
         guard offered.channelModes.contains(.stereo),
               let rate = rates.contains(preferredSampleRate) ? preferredSampleRate : rates.first(where: { $0 <= 96000 }),
@@ -138,11 +154,14 @@ public final class StreamSession {
         self.seid = seid
 
         let config = LDACCodecInfo(sampleRates: rateBit, channelModes: .stereo)
-        let caps = [AVDTP.Capability(category: AVDTP.Capability.Category.mediaTransport.rawValue, value: []), config.capability]
+        var caps = [AVDTP.Capability(category: AVDTP.Capability.Category.mediaTransport.rawValue, value: []), config.capability]
+        // With delay reporting the headphones tell us their playback delay, which the Fidelis
+        // device then reports as its latency (lip sync).
+        if delayReporting { caps.append(AVDTP.Capability(category: AVDTP.Capability.Category.delayReporting.rawValue, value: [])) }
         _ = try await sig.send(.setConfiguration, [seid << 2, 1 << 2] + AVDTP.Capability.encodeList(caps))
         _ = try await sig.send(.open, [seid << 2])
         negotiated = Negotiated(sampleRate: rate, codecs: codecs, mtu: 0)
-        log.info("configured LDAC \(rate) Hz stereo on SEID \(seid)")
+        log.info("configured LDAC \(rate) Hz stereo on SEID \(seid)\(delayReporting ? ", delay reporting" : "")")
     }
 
     private func openMedia() async -> (FDBTChannel?, Int) {
@@ -158,6 +177,11 @@ public final class StreamSession {
     private func sinkCommand(_ cmd: AVDTP.Message) {
         log.info("sink sent \(cmd.signal.map { "\($0)" } ?? "signal \(cmd.signalID)")")
         switch cmd.signal {
+        case .delayReport where cmd.payload.count >= 3:
+            // Delay in 1/10 ms, big-endian, after the ACP SEID (AVDTP 1.3 §8.19).
+            let tenthsMs = Int(cmd.payload[1]) << 8 | Int(cmd.payload[2])
+            log.info("headphones report \(Double(tenthsMs) / 10) ms playback delay")
+            onSinkDelay?(tenthsMs * 100)
         case .close, .abort: lost("headphones closed the stream")
         default: break
         }
@@ -190,6 +214,8 @@ public final class StreamSession {
     private func teardown(handBack: Bool = true) async {
         streamer?.stop()
         streamer = nil
+        source?.stop()
+        source = nil
         media?.close()
         media = nil
         signaling?.onClose = nil

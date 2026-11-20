@@ -16,6 +16,7 @@ struct FidelisApp: App {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 let e = engine
                 if let addr = ProcessInfo.processInfo.environment["FIDELIS_DEVICE"] { e.selectedAddress = addr }
+                if let src = ProcessInfo.processInfo.environment["FIDELIS_SOURCE"].flatMap(Engine.SourceChoice.init) { e.source = src }
                 e.log.info("selftest: streaming for \(Int(secs)) s")
                 e.start()
                 Self.selftestWatch(e, until: Date().addingTimeInterval(secs + 90), streamFor: secs)

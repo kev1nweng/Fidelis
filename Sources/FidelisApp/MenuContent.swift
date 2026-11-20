@@ -42,13 +42,20 @@ struct MenuContent: View {
 
         Menu("音源") {
             Picker("音源", selection: $engine.source) {
+                Text("系统音频").tag(Engine.SourceChoice.system)
                 Text("测试提示音").tag(Engine.SourceChoice.chime)
                 Text("静音").tag(Engine.SourceChoice.silence)
             }
             .pickerStyle(.inline)
             .labelsHidden()
             Divider()
-            Text("系统音频将在下一阶段加入")
+            if engine.driverBusy {
+                Text(engine.driverInstalled ? "正在移除音频驱动…" : "正在安装音频驱动…")
+            } else if engine.driverInstalled {
+                Button("移除音频驱动…") { changeDriver(remove: true) }
+            } else {
+                Button("安装音频驱动…") { changeDriver(remove: false) }
+            }
         }
         .disabled(engine.status.isActive)
 
@@ -80,6 +87,8 @@ struct MenuContent: View {
     private var statusLine: String {
         guard engine.apiAvailable else { return "此 macOS 版本不受支持" }
         switch engine.status {
+        case .idle where engine.source == .system && !engine.driverInstalled:
+            return "需要安装音频驱动（音源菜单）"
         case .idle:
             return engine.headphones.first(where: { $0.address == engine.selectedAddress }).map { "未启用 · \($0.name)" } ?? "未启用"
         case .connecting(let step): return step
@@ -91,6 +100,13 @@ struct MenuContent: View {
         case .stopping: return "正在交还给 macOS…"
         case .failed(let why): return "出错：\(why)"
         }
+    }
+
+    private func changeDriver(remove: Bool) {
+        let res = Bundle.main.bundleURL.appendingPathComponent("Contents")
+        engine.changeDriver(script: res.appendingPathComponent("Resources/install-driver.sh").path,
+                            bundledDriver: res.appendingPathComponent("Library/Audio/Plug-Ins/HAL/Fidelis.driver").path,
+                            remove: remove)
     }
 
     private func quit() {

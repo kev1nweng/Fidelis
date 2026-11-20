@@ -78,7 +78,7 @@ final class LDACEncoderTests: XCTestCase {
     func testEncodesSilenceIntoMTUSizedPackets() throws {
         let enc = try XCTUnwrap(LDACEncoder(sampleRate: 48000, mtu: 679, quality: .kbps660))
         XCTAssertEqual(enc.bitrateKbps, 660)
-        let pcm = UnsafeMutablePointer<Int16>.allocate(capacity: 256)
+        let pcm = UnsafeMutablePointer<Float>.allocate(capacity: 256)
         defer { pcm.deallocate() }
         pcm.update(repeating: 0, count: 256)
         var packets = 0

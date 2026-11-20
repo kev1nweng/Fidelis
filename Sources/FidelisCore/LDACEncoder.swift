@@ -40,7 +40,7 @@ public final class LDACEncoder {
         // Start from a documented EQMID, then step to the requested rung.
         let start: LDACQuality = quality >= .kbps660 ? quality : .kbps330
         guard ldacBT_init_handle_encode(h, Int32(mtu), start.eqmid, Int32(LDACBT_CHANNEL_MODE_STEREO),
-                                        LDACBT_SMPL_FMT_S16, Int32(sampleRate)) == 0 else {
+                                        LDACBT_SMPL_FMT_F32, Int32(sampleRate)) == 0 else {
             ldacBT_free_handle(h)
             return nil
         }
@@ -65,9 +65,9 @@ public final class LDACEncoder {
 
     public var bitrateKbps: Int { handle.map { Int(ldacBT_get_bitrate($0)) } ?? 0 }
 
-    /// Encodes one 128-frame interleaved S16 stereo block. Returns a media payload (LDAC header
+    /// Encodes one 128-frame interleaved Float32 stereo block. Returns a media payload (LDAC header
     /// byte + transport frames) when a packet is complete, otherwise nil.
-    public func encode(_ pcm: UnsafeMutablePointer<Int16>) -> (payload: [UInt8], frames: Int)? {
+    public func encode(_ pcm: UnsafeMutablePointer<Float>) -> (payload: [UInt8], frames: Int)? {
         guard let handle else { return nil }
         var used: Int32 = 0, wrote: Int32 = 0, frames: Int32 = 0
         let r = out.withUnsafeMutableBufferPointer { o in

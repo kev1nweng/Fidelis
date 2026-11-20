@@ -69,7 +69,7 @@ public final class MediaStreamer: @unchecked Sendable {
         log.info("media: LDAC \(encoder.bitrateKbps) kbps @ \(sampleRate) Hz, MTU \(mtu)")
 
         let block = LDACEncoder.blockFrames
-        let pcm = UnsafeMutablePointer<Int16>.allocate(capacity: block * 2)
+        let pcm = UnsafeMutablePointer<Float>.allocate(capacity: block * 2)
         defer { pcm.deallocate() }
         var packet = [UInt8](repeating: 0, count: 1100)
 
