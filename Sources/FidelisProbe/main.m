@@ -69,16 +69,11 @@ static FDL2CAPChannel *takeSignaling(IOBluetoothDevice *d) {
         long code = 0;
         FDL2CAPChannel *ch = nil;
         if (!d.isConnected) {
-            // Preferred: ask for the channel on a link that is down, so the page is ours and our
-            // L2CAP connect is the first thing on the new link.
-            ch = [FDL2CAPChannel openOn:d psm:0x19 timeout:12 code:&code];
-            say(@"attempt %d: direct open on idle link -> %@ (code %ld), connected=%d",
-                attempt, ch ? @"channel" : @"no channel", code, d.isConnected);
-            if (!ch && !d.isConnected) {
-                IOReturn r = [d openConnection];
-                say(@"attempt %d: openConnection -> 0x%x, connected=%d", attempt, r, d.isConnected);
-                if (r != kIOReturnSuccess && !d.isConnected) { FDSpinUntil(1.0, ^{ return NO; }); continue; }
-            }
+            // Note: requesting the channel on an idle link does not page; the request just hangs
+            // and leaves the session busy (code 24). Always bring the link up first.
+            IOReturn r = [d openConnection];
+            say(@"attempt %d: openConnection -> 0x%x, connected=%d", attempt, r, d.isConnected);
+            if (r != kIOReturnSuccess && !d.isConnected) { FDSpinUntil(1.0, ^{ return NO; }); continue; }
         }
         if (!ch) ch = [FDL2CAPChannel openOn:d psm:0x19 timeout:3 code:&code];
         if (!ch) {
@@ -190,6 +185,7 @@ static int cmdFlood(NSArray<NSString *> *args) {
 }
 
 int FDHelperMain(NSString *addr, uint16_t psm);
+int FDRunConnTest(NSString *addr, NSArray<NSNumber *> *services, BOOL lowLatency);
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
@@ -201,6 +197,18 @@ int main(int argc, const char *argv[]) {
         if ([cmd isEqualToString:@"list"]) return cmdList();
         if ([cmd isEqualToString:@"caps"] && args.count > 2) return cmdCaps(args[2]);
         if ([cmd isEqualToString:@"helper"] && args.count > 3) return FDHelperMain(args[2], (uint16_t)[args[3] intValue]);
+        if ([cmd isEqualToString:@"conntest"] && args.count > 2) {
+            // conntest <addr> [none|default|n,n,...] [lowlat]
+            NSString *spec = args.count > 3 ? args[3] : @"none";
+            NSArray *svc = nil;
+            if ([spec isEqualToString:@"none"]) svc = @[];
+            else if (![spec isEqualToString:@"default"]) {
+                NSMutableArray *m = [NSMutableArray array];
+                for (NSString *n in [spec componentsSeparatedByString:@","]) [m addObject:@(strtol(n.UTF8String, NULL, 0))];
+                svc = m;
+            }
+            return FDRunConnTest(args[2], svc, args.count > 4 && [args[4] isEqualToString:@"lowlat"]);
+        }
         if ([cmd isEqualToString:@"flood"] && args.count > 2) return cmdFlood(args);
         say(@"usage: fidelis-probe list | caps <addr> | flood <addr> [secs=N] [eqmid=0|1|2] [sndbuf=N] [rate=Hz] [paced]");
         return 64;

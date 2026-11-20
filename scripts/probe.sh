@@ -12,6 +12,7 @@ cd "${0:A:h}/.."
 # The Xcode toolchain on this machine pairs an older clang with the CLT macOS 27 SDK and fails
 # to link; the Command Line Tools toolchain is self-consistent.
 export DEVELOPER_DIR=${DEVELOPER_DIR:-/Library/Developer/CommandLineTools}
+# (Alternatively: Xcode toolchain with SDKROOT pointing at Xcode's own SDK.)
 
 # Plain clang: SwiftPM's new build system currently fails on this machine ("Unknown error parsing
 # property list"), and the probe is a handful of Objective-C files anyway.
