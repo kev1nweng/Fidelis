@@ -12,7 +12,7 @@ macOS only speaks SBC and AAC to Bluetooth headphones. Fidelis implements an A2D
 
 ## 状态 | Status
 
-- [ ] M0 可行性探针 | Feasibility probe（Apple N1 吞吐、通道获取）
+- [x] M0 可行性探针 | Feasibility probe — [结论 | findings](docs/M0-findings.md)
 - [ ] M1 LDAC 播放 WAV | Play a WAV file over LDAC
 - [ ] M2 系统音频 | System audio (HAL driver, resampling)
 - [ ] M3 稳定性 | Robustness (state machine, fault injection)
