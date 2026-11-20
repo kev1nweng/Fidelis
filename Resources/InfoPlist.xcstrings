@@ -1,0 +1,30 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "NSBluetoothAlwaysUsageDescription": {
+      "comment": "Bluetooth permission prompt",
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fidelis talks to your headphones directly to stream LDAC."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fidelis 需要直接与耳机通信，才能以 LDAC 推流。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fidelis 需要直接與耳機通訊，才能以 LDAC 傳送音訊。"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

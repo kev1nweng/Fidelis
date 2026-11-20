@@ -17,6 +17,7 @@ struct FidelisApp: App {
                 let e = engine
                 if let addr = ProcessInfo.processInfo.environment["FIDELIS_DEVICE"] { e.selectedAddress = addr }
                 if let src = ProcessInfo.processInfo.environment["FIDELIS_SOURCE"].flatMap(Engine.SourceChoice.init) { e.source = src }
+                if let q = ProcessInfo.processInfo.environment["FIDELIS_QUALITY"].flatMap(Engine.QualityChoice.init) { e.quality = q }
                 e.log.info("selftest: streaming for \(Int(secs)) s")
                 e.start()
                 Self.selftestWatch(e, until: Date().addingTimeInterval(secs + 90), streamFor: secs)

@@ -35,7 +35,7 @@ public final class Engine: ObservableObject {
         public var id: String { rawValue }
         public var title: String {
             switch self {
-            case .auto: "Auto"
+            case .auto: String(localized: "Auto")
             case .k990: "990"
             case .k660: "660"
             case .k492: "492"
@@ -58,9 +58,9 @@ public final class Engine: ObservableObject {
         public var id: String { rawValue }
         public var title: String {
             switch self {
-            case .system: "System audio"
-            case .chime: "Test chime"
-            case .silence: "Silence"
+            case .system: String(localized: "System Audio")
+            case .chime: String(localized: "Test Chime")
+            case .silence: String(localized: "Silence")
             }
         }
     }
@@ -109,7 +109,7 @@ public final class Engine: ObservableObject {
             }
         }
         refreshDevices()
-        if !apiAvailable { status = .failed("This macOS lacks the Bluetooth interfaces Fidelis uses") }
+        if !apiAvailable { status = .failed(SessionError.privateAPIUnavailable.userMessage) }
     }
 
     public func refreshDevices() {
@@ -174,8 +174,8 @@ public final class Engine: ObservableObject {
         if source == .system {
             refreshDriverState()
             guard FidelisAudioDevice.id != nil else {
-                status = .failed(driverInstalled ? "The Fidelis audio device isn't loaded; reinstall the driver"
-                                                 : "Install the audio driver to stream system audio")
+                status = .failed(driverInstalled ? String(localized: "The Fidelis audio device isn't loaded; reinstall the driver")
+                                                 : String(localized: "Install the audio driver to stream system audio"))
                 return
             }
             // Before the takeover: once the headphones leave macOS, it moves the output elsewhere.
@@ -201,16 +201,18 @@ public final class Engine: ObservableObject {
     }
 
     private func run(address: String) async {
-        guard let device = FDBTDevice(address: address) else { status = .failed("Headphones not found"); return }
+        guard let device = FDBTDevice(address: address) else { status = .failed(SessionError.deviceNotFound.userMessage); return }
         let s = StreamSession(device: device, helperPath: helperPath, log: log)
         s.mode = quality.mode
         session = s
         s.onPhase = { [weak self] phase in
             guard let self, self.session === s else { return }
             switch phase {
-            case .takingOver(let n): self.status = .connecting(n == 1 ? "Taking over from macOS…" : "Taking over (attempt \(n))…")
-            case .negotiating: self.status = .connecting("Negotiating LDAC…")
-            case .openingMedia: self.status = .connecting("Opening audio channel…")
+            case .takingOver(let n):
+                self.status = .connecting(n == 1 ? String(localized: "Taking over from macOS…")
+                                                 : String(localized: "Taking over (attempt \(n))…"))
+            case .negotiating: self.status = .connecting(String(localized: "Negotiating LDAC…"))
+            case .openingMedia: self.status = .connecting(String(localized: "Opening audio channel…"))
             case .streaming:
                 self.status = .streaming
                 self.recoveries = 0
@@ -229,7 +231,8 @@ public final class Engine: ObservableObject {
             guard let self, self.session === s else { return }
             self.session = nil
             self.stats = nil
-            self.recover(address: address, why: why)
+            // `why` is for the log (StreamSession logged it); the menu gets a plain sentence.
+            self.recover(address: address, why: String(localized: "Connection lost"))
         }
         do {
             let choice = source
@@ -250,7 +253,7 @@ public final class Engine: ObservableObject {
         } catch {
             log.error("start failed: \(error)")
             if session === s { session = nil }
-            if wantsStreaming { recover(address: address, why: "\(error)") } else { status = .idle; await router.restore() }
+            if wantsStreaming { recover(address: address, why: userMessage(for: error)) } else { status = .idle; await router.restore() }
         }
     }
 
@@ -275,7 +278,7 @@ public final class Engine: ObservableObject {
             return
         }
         let delay = Double(recoveries) * 3
-        status = .recovering("\(why) — retrying in \(Int(delay)) s")
+        status = .recovering(String(localized: "\(why) — retrying in \(Int(delay)) s"))
         Task {
             try? await Task.sleep(for: .seconds(delay))
             guard wantsStreaming, session == nil else { return }

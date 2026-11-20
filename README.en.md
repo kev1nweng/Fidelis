@@ -10,7 +10,7 @@ A minimal macOS menu bar app that streams LDAC over the Mac's built-in Bluetooth
 - A virtual output device, "Fidelis": volume keys and Control Center work as usual, and it reports its latency so video stays in sync
 - Adaptive bitrate: steps down when the link congests and back up once it is clean (990 / 660 / 492 / 396 / 330 kbps)
 - Switches the default output when streaming starts, then hands the headphones back and restores the previous output
-- Native, minimal menu bar controls
+- Native, minimal menu bar controls, in English, Simplified Chinese and Traditional Chinese
 - No microphone or screen recording permission needed
 
 ## Requirements
@@ -26,12 +26,12 @@ A minimal macOS menu bar app that streams LDAC over the Mac's built-in Bluetooth
    xattr -dr com.apple.quarantine /Applications/Fidelis.app
    ```
 3. Allow Bluetooth access when asked.
-4. From the menu bar icon, choose 音源 (Source) › 安装音频驱动… (Install Audio Driver…). This asks for an administrator password and restarts coreaudiod (all audio stops for about a second).
-5. Pick your headphones under 耳机 (Headphones) and turn on LDAC 输出 (LDAC Output). The menus are in Chinese for now.
+4. From the menu bar icon, choose Source › Install Audio Driver…. This asks for an administrator password and restarts coreaudiod (all audio stops for about a second).
+5. Pick your headphones under Headphones and turn on LDAC Output.
 
 > In unsigned builds the audio driver can only check the reading app by its bundle id. Until a signed release ships, use it only on computers you trust.
 >
-> To remove the driver: 音源 › 移除音频驱动… (Source › Remove Audio Driver…).
+> To remove the driver: Source › Remove Audio Driver….
 
 ## Building from source
 

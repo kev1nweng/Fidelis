@@ -8,60 +8,60 @@ struct MenuContent: View {
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
 
     var body: some View {
-        Text(statusLine)
+        Text(verbatim: statusLine)
 
-        Toggle("LDAC 输出", isOn: Binding(get: { engine.status.isActive }, set: { _ in engine.toggle() }))
+        Toggle("LDAC Output", isOn: Binding(get: { engine.status.isActive }, set: { _ in engine.toggle() }))
             .disabled(!engine.apiAvailable || engine.selectedAddress == nil || engine.status == .stopping)
 
         Divider()
 
-        Menu("耳机") {
+        Menu("Headphones") {
             if engine.headphones.isEmpty {
-                Text("没有已配对的耳机")
+                Text("No Paired Headphones")
             } else {
-                Picker("耳机", selection: Binding(get: { engine.selectedAddress ?? "" }, set: { engine.selectedAddress = $0 })) {
-                    ForEach(engine.headphones) { h in Text(h.name).tag(h.address) }
+                Picker("Headphones", selection: Binding(get: { engine.selectedAddress ?? "" }, set: { engine.selectedAddress = $0 })) {
+                    ForEach(engine.headphones) { h in Text(verbatim: h.name).tag(h.address) }
                 }
                 .pickerStyle(.inline)
                 .labelsHidden()
             }
             Divider()
-            Button("刷新") { engine.refreshDevices() }
+            Button("Refresh") { engine.refreshDevices() }
         }
         .disabled(engine.status.isActive)
 
-        Menu("码率") {
-            Picker("码率", selection: $engine.quality) {
+        Menu("Bitrate") {
+            Picker("Bitrate", selection: $engine.quality) {
                 ForEach(Engine.QualityChoice.allCases) { q in
-                    Text(q == .auto ? "自动" : "\(q.title) kbps").tag(q)
+                    if q == .auto { Text("Auto").tag(q) } else { Text("\(q.title) kbps").tag(q) }
                 }
             }
             .pickerStyle(.inline)
             .labelsHidden()
         }
 
-        Menu("音源") {
-            Picker("音源", selection: $engine.source) {
-                Text("系统音频").tag(Engine.SourceChoice.system)
-                Text("测试提示音").tag(Engine.SourceChoice.chime)
-                Text("静音").tag(Engine.SourceChoice.silence)
+        Menu("Source") {
+            Picker("Source", selection: $engine.source) {
+                Text("System Audio").tag(Engine.SourceChoice.system)
+                Text("Test Chime").tag(Engine.SourceChoice.chime)
+                Text("Silence").tag(Engine.SourceChoice.silence)
             }
             .pickerStyle(.inline)
             .labelsHidden()
             Divider()
             if engine.driverBusy {
-                Text(engine.driverInstalled ? "正在移除音频驱动…" : "正在安装音频驱动…")
+                Text(engine.driverInstalled ? "Removing Audio Driver…" : "Installing Audio Driver…")
             } else if engine.driverInstalled {
-                Button("移除音频驱动…") { changeDriver(remove: true) }
+                Button("Remove Audio Driver…") { changeDriver(remove: true) }
             } else {
-                Button("安装音频驱动…") { changeDriver(remove: false) }
+                Button("Install Audio Driver…") { changeDriver(remove: false) }
             }
         }
         .disabled(engine.status.isActive)
 
         Divider()
 
-        Toggle("登录时启动", isOn: Binding(get: { launchAtLogin }, set: { on in
+        Toggle("Launch at Login", isOn: Binding(get: { launchAtLogin }, set: { on in
             do {
                 if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
             } catch {
@@ -70,7 +70,7 @@ struct MenuContent: View {
             launchAtLogin = SMAppService.mainApp.status == .enabled
         }))
 
-        Button("拷贝诊断日志") {
+        Button("Copy Diagnostic Log") {
             let text = engine.log.recent
                 .map { "\($0.date.formatted(.iso8601)) [\($0.level.rawValue)] \($0.text)" }
                 .joined(separator: "\n")
@@ -80,25 +80,31 @@ struct MenuContent: View {
 
         Divider()
 
-        Button("退出 Fidelis") { quit() }
+        Button("Quit Fidelis") { quit() }
             .keyboardShortcut("q")
     }
 
     private var statusLine: String {
-        guard engine.apiAvailable else { return "此 macOS 版本不受支持" }
+        guard engine.apiAvailable else { return String(localized: "This version of macOS isn't supported") }
         switch engine.status {
         case .idle where engine.source == .system && !engine.driverInstalled:
-            return "需要安装音频驱动（音源菜单）"
+            return String(localized: "Install the audio driver from the Source menu")
         case .idle:
-            return engine.headphones.first(where: { $0.address == engine.selectedAddress }).map { "未启用 · \($0.name)" } ?? "未启用"
+            if let name = engine.headphones.first(where: { $0.address == engine.selectedAddress })?.name {
+                return String(localized: "Off · \(name)")
+            }
+            return String(localized: "Off")
         case .connecting(let step): return step
         case .streaming:
             let kbps = engine.stats?.quality.kbps ?? 0
-            let rate = engine.negotiated.map { String(format: " · %g kHz", Double($0.sampleRate) / 1000) } ?? ""
-            return "LDAC · \(kbps) kbps\(rate)"
-        case .recovering(let why): return "正在恢复：\(why)"
-        case .stopping: return "正在交还给 macOS…"
-        case .failed(let why): return "出错：\(why)"
+            if let rate = engine.negotiated?.sampleRate {
+                let khz = (Double(rate) / 1000).formatted(.number.precision(.fractionLength(0...1)))
+                return String(localized: "LDAC · \(kbps) kbps · \(khz) kHz")
+            }
+            return String(localized: "LDAC · \(kbps) kbps")
+        case .recovering(let why): return String(localized: "Recovering: \(why)")
+        case .stopping: return String(localized: "Handing back to macOS…")
+        case .failed(let why): return String(localized: "Error: \(why)")
         }
     }
 

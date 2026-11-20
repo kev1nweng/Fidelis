@@ -15,6 +15,11 @@ APP=out/Fidelis.app
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers" "$APP/Contents/Resources"
 cp scripts/install-driver.sh "$APP/Contents/Resources/install-driver.sh"
+# Localizations: compile the string catalogs into <lang>.lproj (en is the source language).
+mkdir -p "$APP/Contents/Resources/en.lproj"
+for catalog in Resources/*.xcstrings; do
+  xcrun xcstringstool compile "$catalog" --output-directory "$APP/Contents/Resources"
+done
 cp "$BIN/Fidelis" "$APP/Contents/MacOS/Fidelis"
 cp "$BIN/FidelisMediaHelper" "$APP/Contents/Helpers/FidelisMediaHelper"
 cp Resources/App-Info.plist "$APP/Contents/Info.plist"
