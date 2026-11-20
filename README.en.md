@@ -4,8 +4,6 @@
 
 A minimal macOS menu bar app that streams LDAC over the Mac's built-in Bluetooth.
 
-> ⚠️ Early preview: it streams system audio to headphones as LDAC (tested with a SIMGOT EH500, steady at 660 kbps), but has not been soak-tested yet.
-
 ## Features
 
 - A user-space A2DP source that streams your Mac's audio as LDAC: no dongle, no kernel extension, SIP left on
