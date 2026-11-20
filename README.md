@@ -21,6 +21,17 @@ macOS only speaks SBC and AAC to Bluetooth headphones. Fidelis implements an A2D
 
 设计见 [docs/DESIGN.md](docs/DESIGN.md)。 | See [docs/DESIGN.md](docs/DESIGN.md) for the design.
 
+## 构建 | Build
+
+```bash
+git submodule update --init
+scripts/build-app.sh          # -> out/Fidelis.app
+swift test                    # 需先 source scripts/env.sh | after `source scripts/env.sh`
+scripts/selftest.sh <耳机地址 | address> 30   # 实机推流 30 s | stream to real headphones for 30 s
+```
+
+需要 Xcode（工具链 + SDK）。仅官方支持 macOS 27；macOS 26 未测试。 | Requires Xcode. Officially supports macOS 27 only; macOS 26 is untested.
+
 ## 致谢 | Acknowledgements
 
 - [libldac](https://android.googlesource.com/platform/external/libldac)（Sony，Apache-2.0）

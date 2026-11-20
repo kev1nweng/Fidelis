@@ -2,7 +2,7 @@
 /reference/
 
 # Swift / Xcode
-.build/
+/.build/
 .swiftpm/
 DerivedData/
 *.xcuserstate

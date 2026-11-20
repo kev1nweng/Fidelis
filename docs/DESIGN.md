@@ -142,7 +142,24 @@
   - libldac 本身是 C；
   - 守护进程主体和 UI 建议用 Swift（备选 Rust + objc2），在 M1 开始前定下来。
 
-## 9. 待决问题
+## 9. 已定决策（2026-11-20）
+- **语言**：Swift 写主体（`FidelisCore` 和 App），Objective-C 写私有蓝牙层（`FidelisBluetooth`），libldac 是 C。
+- **GUI**：只做一个原生菜单栏菜单（`MenuBarExtra` 的 `.menu` 样式），风格参照 Notchless：一行状态、"LDAC 输出"开关、耳机 / 码率 / 音源三个子菜单、登录时启动、拷贝诊断日志、退出。不做浮窗面板。
+- **系统版本**：只官方支持 macOS 27；macOS 26 标注为"未测试，不一定不能用"（`LSMinimumSystemVersion` 设为 26.0，运行时用 `privateAPIAvailable` 预检）。
+- **单进程 + 辅助进程**：App 进程本身完全不持有 L2CAP 通道，信令和媒体通道**各由一个辅助进程**打开（`FidelisMediaHelper`，签名标识独立）。原因：
+  - 一个请求如果一直没有回应，它所在的 client session 就会永久卡在 code 24，只有结束进程才能解开；
+  - bluetoothd 的 session 名里带 pid，所以每个新进程就是一个新 session。
+
+## 10. 接管机制：目前的理解
+- **为什么会"抢输"**：AVDTP 1.3 §5.4 规定，耳机把 PSM 0x19 上**第一条**建立的 L2CAP 通道当作信令，之后的都当作媒体通道。链路一起来，bluetoothd 就会做 `A2DPService - handling connection that was pending` → `AVDTP_Connect`。如果它的通道先到耳机，我们那条就被当成媒体通道，DISCOVER 不会有回应。
+- **`closeConnection` 不一定真的断链**：只有当前进程之前对这条链路调过 `openConnection`，它的 `closeConnection` 才会生效。所以要先 `openConnection`（链路已在时立刻返回），再 `closeConnection`。修了这一点之后，App 实测第 1 次就接管成功，耗时 1.03 s。
+- **在链路断开时直接请求通道不会触发寻呼**：请求只会挂起，并让 session 卡在 code 24。所以必须先建好链路。
+- **用 `CBClassicManager connectPeer:options:` 传 `kCBOptionServicesKey=[]`，挡不住 bluetoothd 启动 A2DP。**
+- 待研究：
+  - 媒体通道要等 6–25 s（期间收到 code -3 空回调）；
+  - 能不能让 bluetoothd 对这个设备暂停 A2DP 自动连接（例如通过 bluetoothd 的 XPC 消息，SIP 关着可以挂 dtrace 去找）。
+
+## 11. 待决问题
 1. ~~测试用的 LDAC 耳机型号？~~ SIMGOT EH500（已确认支持 LDAC 44.1–96 kHz）。
 2. Transport 后端：等 M0 结果再定。
 3. 捕获方案：驱动还是 process tap，等 M2 对比后定。
