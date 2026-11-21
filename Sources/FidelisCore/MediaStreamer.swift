@@ -12,6 +12,8 @@ public final class MediaStreamer: @unchecked Sendable {
         public var lagMs: Double = 0
         public var qualityChanges = 0
         public var skips = 0
+        /// Most packets waiting in the socket during the second (adaptive mode).
+        public var queuePackets = 0
     }
 
     public enum EndReason: Sendable { case stopped, writeFailed(Int32), stalled(Double) }
@@ -84,6 +86,12 @@ public final class MediaStreamer: @unchecked Sendable {
             return
         }
         log.info("media: LDAC \(encoder.bitrateKbps) kbps @ \(sampleRate) Hz, MTU \(mtu)")
+        let queue = SendQueue(fd: fd)
+        log.info("media: send queue \(queue.capacity) bytes\(queue.probes ? "" : " (depth not readable: full or empty only)")")
+        // Adaptive mode runs Sony's ABR; a fixed rung keeps BitrateController's emergency steps.
+        var abr: LDACABR? = { if case .adaptive = controller.mode { return LDACABR() }; return nil }()
+        var nextABR = Clock.now
+        var lastPacketBytes = mtu
 
         let block = LDACEncoder.blockFrames
         let pcm = UnsafeMutablePointer<Float>.allocate(capacity: block * 2)
@@ -104,7 +112,7 @@ public final class MediaStreamer: @unchecked Sendable {
 
         var stats = Stats(quality: encoder.quality)
         var winStart = Clock.now, winBytes = 0, winPackets = 0
-        var winMaxWrite = 0.0, winMaxLag = 0.0
+        var winMaxWrite = 0.0, winMaxLag = 0.0, winMaxQueue = 0
         var endReason: EndReason = .stopped
 
         while !stopFlag.get() {
@@ -127,6 +135,18 @@ public final class MediaStreamer: @unchecked Sendable {
                 continue
             }
             winMaxLag = max(winMaxLag, lag)
+
+            if let abr, Clock.now >= nextABR {
+                nextABR = max(nextABR + LDACABR.intervalSeconds, Clock.now - LDACABR.intervalSeconds)
+                let bytes = queue.queuedBytes()
+                let depth = (bytes + lastPacketBytes - 1) / lastPacketBytes
+                winMaxQueue = max(winMaxQueue, depth)
+                if case .adaptive(let ceiling) = controller.mode,
+                   encoder.adapt(abr, queueDepth: depth, ceiling: ceiling) {
+                    stats.qualityChanges += 1
+                    log.info("media: rung -> \(encoder.quality.label) (ABR, \(depth) packets queued)")
+                }
+            }
 
             source.render(pcm, frames: block)
             pendingFrames += block
@@ -167,6 +187,7 @@ public final class MediaStreamer: @unchecked Sendable {
                 break
             }
             winMaxWrite = max(winMaxWrite, writeTime)
+            lastPacketBytes = max(len, 1)
             seq &+= 1
             rtpTimestamp &+= UInt32(pendingFrames)
             framesSent += pendingFrames
@@ -181,22 +202,29 @@ public final class MediaStreamer: @unchecked Sendable {
                 stats.packetsPerSecond = Double(winPackets) / dt
                 stats.maxWriteMs = winMaxWrite * 1000
                 stats.lagMs = winMaxLag * 1000
+                stats.queuePackets = winMaxQueue
                 if let m = lock.withLock({ () -> BitrateController.Mode? in defer { pendingMode = nil }; return pendingMode }) {
                     controller.mode = m
-                    if controller.quality != encoder.quality { encoder.setQuality(controller.quality); stats.qualityChanges += 1 }
+                    if case .adaptive(let ceiling) = m {
+                        if abr == nil { abr = LDACABR() }
+                        if encoder.quality > ceiling { encoder.setQuality(ceiling); stats.qualityChanges += 1 }
+                    } else {
+                        abr = nil
+                        if controller.quality != encoder.quality { encoder.setQuality(controller.quality); stats.qualityChanges += 1 }
+                    }
                 }
-                if let q = controller.observe(.init(maxWriteMs: stats.maxWriteMs, lagMs: stats.lagMs)) {
+                if abr == nil, let q = controller.observe(.init(maxWriteMs: stats.maxWriteMs, lagMs: stats.lagMs)) {
                     encoder.setQuality(q)
                     stats.qualityChanges += 1
                     log.info("media: rung -> \(q.label) (write \(String(format: "%.1f", stats.maxWriteMs)) ms, lag \(String(format: "%.1f", stats.lagMs)) ms)")
                 }
                 stats.quality = encoder.quality
-                if Int(stats.seconds) % 5 == 0 {
-                    log.debug(String(format: "media: %.0fs %@ %.0f kbps %.1f pkt/s write %.1f ms lag %.1f ms",
-                                     stats.seconds, stats.quality.label, stats.kbps, stats.packetsPerSecond, stats.maxWriteMs, stats.lagMs))
-                }
+                // Every second to the log file, so a glitch can be read back afterwards.
+                log.trace(String(format: "media: %.0fs %@ %.0f kbps %.1f pkt/s write %.1f ms lag %.1f ms queue %d pkt skips %d",
+                                 stats.seconds, stats.quality.label, stats.kbps, stats.packetsPerSecond, stats.maxWriteMs,
+                                 stats.lagMs, stats.queuePackets, stats.skips))
                 onStats?(stats)
-                winStart = wnow; winBytes = 0; winPackets = 0; winMaxWrite = 0; winMaxLag = 0
+                winStart = wnow; winBytes = 0; winPackets = 0; winMaxWrite = 0; winMaxLag = 0; winMaxQueue = 0
             }
         }
         onEnd?(endReason)

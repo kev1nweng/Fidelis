@@ -20,6 +20,13 @@ let package = Package(
             publicHeadersPath: "inc",
             cSettings: [.unsafeFlags(["-w", "-O2"])]
         ),
+        // Its adaptive bitrate (libldac/abr), what Android's LDAC "best effort" runs.
+        .target(
+            name: "CLDACABR",
+            dependencies: ["CLDAC"],
+            path: "Sources/CLDACABR",
+            cSettings: [.unsafeFlags(["-w", "-O2", "-I", Context.packageDirectory + "/third_party/libldac/abr/inc"])]
+        ),
         // Every private Bluetooth entry point lives here and nowhere else.
         .target(
             name: "FidelisBluetooth",
@@ -45,7 +52,7 @@ let package = Package(
         ),
         .target(
             name: "FidelisCore",
-            dependencies: ["FidelisBluetooth", "CLDAC"],
+            dependencies: ["FidelisBluetooth", "CLDAC", "CLDACABR"],
             path: "Sources/FidelisCore",
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),

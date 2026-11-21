@@ -1,5 +1,6 @@
 import Foundation
 import CLDAC
+import CLDACABR
 
 /// LDAC quality rungs. libldac's documented EQMIDs are HQ/SQ/MQ (0/1/2); stepping with
 /// ldacBT_alter_eqmid_priority also reaches the undocumented 492/396 rungs (EQMID 3 and 4).
@@ -63,6 +64,19 @@ public final class LDACEncoder {
         }
     }
 
+    /// One step of Sony's adaptive bitrate (see LDACABR) for `queueDepth` packets waiting to be
+    /// sent, kept at or below `ceiling`. Returns true when the rung changed.
+    @discardableResult
+    func adapt(_ abr: LDACABR, queueDepth: Int, ceiling: LDACQuality) -> Bool {
+        guard let handle else { return false }
+        let before = quality
+        _ = ldac_ABR_Proc(handle, abr.handle, UInt32(min(max(queueDepth, 0), 255)), 1)
+        if let q = LDACQuality.allCases.first(where: { $0.eqmid == ldacBT_get_eqmid(handle) }) { quality = q }
+        // Takes effect from the next frame, so a step above the ceiling is never heard.
+        if quality > ceiling { setQuality(ceiling) }
+        return quality != before
+    }
+
     public var bitrateKbps: Int { handle.map { Int(ldacBT_get_bitrate($0)) } ?? 0 }
 
     /// Encodes one 128-frame interleaved Float32 stereo block. Returns a media payload (LDAC header
@@ -83,4 +97,21 @@ public final class LDACEncoder {
         }
         return (payload, Int(frames))
     }
+}
+
+/// Sony's LDAC adaptive bitrate (libldac/abr), as Android runs it for LDAC "best effort": called
+/// every 20 ms with the number of packets waiting to be sent, it steps down as soon as that queue
+/// grows (two rungs at once from 990/660 when it is critical) and climbs back only after seconds
+/// with an empty queue, waiting longer each time a climb had to be undone.
+final class LDACABR {
+    static let intervalSeconds = 0.020
+    let handle: HANDLE_LDAC_ABR
+
+    init?() {
+        guard let h = ldac_ABR_get_handle() else { return nil }
+        guard ldac_ABR_Init(h, UInt32(Self.intervalSeconds * 1000)) == 0 else { ldac_ABR_free_handle(h); return nil }
+        handle = h
+    }
+
+    deinit { ldac_ABR_free_handle(handle) }
 }

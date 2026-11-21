@@ -83,7 +83,7 @@ public final class Engine: ObservableObject {
     }
     @Published public private(set) var driverInstalled = FidelisAudioDevice.isDriverInstalled
 
-    public let log = Log()
+    public let log = Log(file: Log.defaultFile)
     public let apiAvailable = FDBTDevice.privateAPIAvailable()
     private let helperPath: String
     private var session: StreamSession?
