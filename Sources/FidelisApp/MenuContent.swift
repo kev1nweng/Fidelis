@@ -33,7 +33,11 @@ struct MenuContent: View {
         Menu("Bitrate") {
             Picker("Bitrate", selection: $engine.quality) {
                 ForEach(Engine.QualityChoice.allCases) { q in
-                    if q == .auto { Text("Auto").tag(q) } else { Text("\(q.title) kbps").tag(q) }
+                    switch q {
+                    case .auto: Text("Auto (Recommended)").tag(q)
+                    case .autoAggressive: Text("Auto (Aggressive)").tag(q)
+                    default: Text("\(q.title) kbps").tag(q)
+                    }
                 }
             }
             .pickerStyle(.inline)

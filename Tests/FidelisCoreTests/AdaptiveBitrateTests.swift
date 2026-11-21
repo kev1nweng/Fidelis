@@ -39,3 +39,35 @@ final class AdaptiveBitrateTests: XCTestCase {
         XCTAssertEqual(highest, .kbps660)
     }
 }
+
+final class ClimbBackoffTests: XCTestCase {
+    func testAFailedClimbIsHeldOffLongerEachTime() {
+        var b = ClimbBackoff()
+        b.changed(from: .kbps492, to: .kbps660, at: 0)
+        XCTAssertEqual(b.changed(from: .kbps660, to: .kbps492, at: 10), 30)
+        XCTAssertEqual(b.ceiling(.kbps660, at: 39), .kbps492)
+        XCTAssertEqual(b.ceiling(.kbps660, at: 40), .kbps660)
+        b.changed(from: .kbps492, to: .kbps660, at: 45)
+        XCTAssertEqual(b.changed(from: .kbps660, to: .kbps492, at: 50), 60)
+        XCTAssertEqual(b.ceiling(.kbps660, at: 100), .kbps492)
+    }
+
+    func testARungThatHeldClearsItsRecord() {
+        var b = ClimbBackoff()
+        b.changed(from: .kbps492, to: .kbps660, at: 0)
+        b.changed(from: .kbps660, to: .kbps492, at: 5)          // held off 30 s
+        b.changed(from: .kbps492, to: .kbps660, at: 40)
+        XCTAssertNil(b.changed(from: .kbps660, to: .kbps492, at: 100))   // held a minute: a real change
+        b.changed(from: .kbps492, to: .kbps660, at: 110)
+        XCTAssertEqual(b.changed(from: .kbps660, to: .kbps492, at: 115), 30)   // starts over
+    }
+
+    func testBlockedRungsStack() {
+        var b = ClimbBackoff()
+        b.changed(from: .kbps492, to: .kbps660, at: 0)
+        b.changed(from: .kbps660, to: .kbps492, at: 1)
+        b.changed(from: .kbps396, to: .kbps492, at: 2)
+        b.changed(from: .kbps492, to: .kbps396, at: 3)
+        XCTAssertEqual(b.ceiling(.kbps660, at: 10), .kbps396)
+    }
+}

@@ -31,11 +31,14 @@ public final class Engine: ObservableObject {
     }
 
     public enum QualityChoice: String, CaseIterable, Identifiable, Sendable {
-        case auto, k990, k660, k492, k330
+        /// `auto` holds back climbs that keep failing (ClimbBackoff); `autoAggressive` is libldac
+        /// ABR as Android runs it.
+        case auto, autoAggressive, k990, k660, k492, k330
         public var id: String { rawValue }
         public var title: String {
             switch self {
-            case .auto: String(localized: "Auto")
+            case .auto: String(localized: "Auto (Recommended)")
+            case .autoAggressive: String(localized: "Auto (Aggressive)")
             case .k990: "990"
             case .k660: "660"
             case .k492: "492"
@@ -45,6 +48,7 @@ public final class Engine: ObservableObject {
         var mode: BitrateController.Mode {
             switch self {
             case .auto: .adaptive(ceiling: .kbps660)
+            case .autoAggressive: .adaptive(ceiling: .kbps660, aggressive: true)
             case .k990: .fixed(.kbps990)
             case .k660: .fixed(.kbps660)
             case .k492: .fixed(.kbps492)

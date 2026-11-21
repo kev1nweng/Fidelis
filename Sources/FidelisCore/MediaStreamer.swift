@@ -92,12 +92,17 @@ public final class MediaStreamer: @unchecked Sendable {
             onEnd?(.writeFailed(EINVAL))
             return
         }
-        log.info("media: LDAC \(encoder.bitrateKbps) kbps @ \(sampleRate) Hz, MTU \(mtu)")
+        let modeLabel: String = switch controller.mode {
+        case .adaptive(_, let aggressive): aggressive ? "auto (aggressive)" : "auto"
+        case .fixed(let q): "fixed \(q.label)"
+        }
+        log.info("media: LDAC \(encoder.bitrateKbps) kbps @ \(sampleRate) Hz, MTU \(mtu), bitrate \(modeLabel)")
         let queue = SendQueue(fd: fd)
         log.info("media: send queue \(queue.capacity) bytes\(queue.probes ? "" : " (depth not readable: full or empty only)")")
         // Adaptive mode runs Sony's ABR; a fixed rung keeps BitrateController's emergency steps.
         var abr: LDACABR? = { if case .adaptive = controller.mode { return LDACABR() }; return nil }()
         var nextABR = Clock.now
+        var backoff = ClimbBackoff()
         var lastPacketBytes = mtu
 
         let block = LDACEncoder.blockFrames
@@ -148,10 +153,14 @@ public final class MediaStreamer: @unchecked Sendable {
                 let bytes = queue.queuedBytes()
                 let depth = (bytes + lastPacketBytes - 1) / lastPacketBytes
                 winMaxQueue = max(winMaxQueue, depth)
-                if case .adaptive(let ceiling) = controller.mode,
-                   encoder.adapt(abr, queueDepth: depth, ceiling: ceiling) {
+                let before = encoder.quality
+                if case .adaptive(let ceiling, let aggressive) = controller.mode,
+                   encoder.adapt(abr, queueDepth: depth, ceiling: aggressive ? ceiling : backoff.ceiling(ceiling, at: Clock.now)) {
                     stats.qualityChanges += 1
                     log.info("media: rung -> \(encoder.quality.label) (ABR, \(depth) packets queued)")
+                    if let hold = backoff.changed(from: before, to: encoder.quality, at: Clock.now) {
+                        log.info("media: \(before.label) undone soon after reaching it; not trying it again for \(Int(hold)) s")
+                    }
                 }
             }
 
@@ -212,7 +221,7 @@ public final class MediaStreamer: @unchecked Sendable {
                 stats.queuePackets = winMaxQueue
                 if let m = lock.withLock({ () -> BitrateController.Mode? in defer { pendingMode = nil }; return pendingMode }) {
                     controller.mode = m
-                    if case .adaptive(let ceiling) = m {
+                    if case .adaptive(let ceiling, _) = m {
                         if abr == nil { abr = LDACABR() }
                         if encoder.quality > ceiling { encoder.setQuality(ceiling); stats.qualityChanges += 1 }
                     } else {

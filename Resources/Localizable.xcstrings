@@ -49,18 +49,34 @@
         }
       }
     },
-    "Auto": {
+    "Auto (Aggressive)": {
       "localizations": {
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "自动"
+            "value": "自动（激进）"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "自動"
+            "value": "自動（積極）"
+          }
+        }
+      }
+    },
+    "Auto (Recommended)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自动（推荐）"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自動（建議）"
           }
         }
       }
