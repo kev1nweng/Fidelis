@@ -16,6 +16,8 @@ struct Takeover {
     let log: Log
     let onAttempt: (Int) -> Void
     var maxAttempts = 6
+    /// Checked between attempts: the session was stopped, give up.
+    var isCancelled: () -> Bool = { false }
 
     init(device: FDBTDevice, helperPath: String, log: Log, onAttempt: @escaping (Int) -> Void) {
         self.device = device; self.helperPath = helperPath; self.log = log; self.onAttempt = onAttempt
@@ -24,6 +26,7 @@ struct Takeover {
     func acquireSignaling() async throws -> SignalingChannel {
         var lastWhy = "unknown"
         for attempt in 1...maxAttempts {
+            guard !isCancelled() else { throw SessionError.cancelled }
             onAttempt(attempt)
             if device.isConnected {
                 // closeConnection only drops the link for a client that asked for it, so register
@@ -42,6 +45,10 @@ struct Takeover {
                     cont.resume(returning: (ch, code))
                 }
             }
+            if isCancelled() {
+                channel?.close()
+                throw SessionError.cancelled
+            }
             guard let channel else {
                 lastWhy = "open failed (code \(code))"
                 log.warn("takeover \(attempt): \(lastWhy)")
@@ -49,7 +56,9 @@ struct Takeover {
                 continue
             }
             let sig = SignalingChannel(channel: channel, log: log)
-            if let eps = try? await sig.discover(timeout: 2.0), !eps.isEmpty {
+            let eps = try? await sig.discover(timeout: 2.0)
+            if isCancelled() { sig.close(); throw SessionError.cancelled }
+            if let eps, !eps.isEmpty {
                 log.info("takeover \(attempt): signaling is ours after \(String(format: "%.2f", Date().timeIntervalSince(t0))) s (\(eps.count) endpoints)")
                 return sig
             }

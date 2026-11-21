@@ -1,5 +1,6 @@
 import CoreAudio
 import Foundation
+import Synchronization
 
 /// Moves the system output to the Fidelis device while streaming system audio, and back after.
 ///
@@ -42,6 +43,7 @@ final class OutputRouter {
     /// Back to the remembered output, waiting up to `timeout` for it to (re)appear. Leaves the
     /// output alone if the user has meanwhile picked something other than Fidelis.
     func restore(timeout: TimeInterval = 12) async {
+        defer { finishHeadphoneLevel() }
         guard let uid = saved else { return }
         let deadline = Date().addingTimeInterval(timeout)
         while true {
@@ -53,6 +55,8 @@ final class OutputRouter {
                 if FidelisAudioDevice.uid(of: current) == uid { break }
             }
             if let target = FidelisAudioDevice.deviceID(uid: uid) {
+                // Their old volume first, then the audio.
+                _ = Self.applySavedLevel()
                 if FidelisAudioDevice.setDefaultOutput(target) { log.info("output: back to \(uid)") }
                 break
             }
@@ -68,13 +72,139 @@ final class OutputRouter {
 
     /// Synchronous variant for launch: only if the device is there now.
     func restoreIfNeeded() {
+        finishHeadphoneLevel()
         guard let uid = saved else { return }
-        if FidelisAudioDevice.defaultOutput == FidelisAudioDevice.id, let target = FidelisAudioDevice.deviceID(uid: uid) {
+        if FidelisAudioDevice.defaultOutput == FidelisAudioDevice.id {
+            guard let target = FidelisAudioDevice.deviceID(uid: uid) else {
+                // Not back yet (still held, or off): keep it, so the next stop or quit can still
+                // return there instead of leaving the output on Fidelis.
+                log.warn("output: \(uid) from the last run is not here yet; will return there later")
+                return
+            }
             FidelisAudioDevice.setDefaultOutput(target)
             log.info("output: restored \(uid) left over from the last run")
         }
         saved = nil
     }
+
+    // MARK: The headphones' own volume
+
+    /// While Fidelis streams, macOS no longer sets the headphones' own (AVRCP) volume, so it stays
+    /// where macOS left it and the Fidelis slider can only go quieter from there. So: lift it to
+    /// 100% just before the takeover, let the Fidelis slider do all of the attenuation, and put
+    /// it back when macOS has the headphones again.
+    ///
+    /// Nothing may get louder on the way:
+    /// - the lift happens only once nothing plays on the headphones (output moved to Fidelis,
+    ///   the device idle, and a moment for what was already sent to play out);
+    /// - the Fidelis slider starts one step below the headphones' old volume, and the stream
+    ///   fades in (SystemAudioSource);
+    /// - the old volume goes back the instant the headphones' device reappears, from a CoreAudio
+    ///   listener rather than a poll, and it is kept in user defaults so a crash can't lose it.
+    nonisolated private static let levelKey = "restoreHeadphoneLevel"
+    private var levelListener: AudioObjectPropertyListenerBlock?
+    private let levelQueue = DispatchQueue(label: "fidelis.headphone-level", qos: .userInteractive)
+
+    private var savedLevel: (uid: String, volume: Float)? {
+        get {
+            guard let d = UserDefaults.standard.dictionary(forKey: Self.levelKey),
+                  let uid = d["uid"] as? String, let v = d["volume"] as? Double else { return nil }
+            return (uid, Float(v))
+        }
+        set {
+            if let newValue { UserDefaults.standard.set(["uid": newValue.uid, "volume": Double(newValue.volume)], forKey: Self.levelKey) }
+            else { UserDefaults.standard.removeObject(forKey: Self.levelKey) }
+        }
+    }
+
+    static func headphonesUID(_ address: String) -> String { address.uppercased() + ":output" }
+
+    /// Before a takeover of `address`. `firstAttempt` sets the Fidelis slider (not on reconnects,
+    /// where the listener may have moved it since). Returns false when the volume was left alone.
+    @discardableResult
+    func liftHeadphones(address: String, firstAttempt: Bool, proceed: () -> Bool = { true }) async -> Bool {
+        let uid = Self.headphonesUID(address)
+        guard let hp = FidelisAudioDevice.deviceID(uid: uid), let fidelis = FidelisAudioDevice.id,
+              let current = FidelisAudioDevice.volume(hp) else { return false }
+        // A crashed run left them lifted: its saved value is the real one.
+        let original = savedLevel.flatMap { $0.uid == uid ? $0.volume : nil } ?? current
+        savedLevel = (uid, original)
+        watchHeadphones()
+        if firstAttempt {
+            FidelisAudioDevice.setVolume(fidelis, max(0, original - 1.0 / 16))
+        }
+        routeToFidelis()
+        guard await waitFor(timeout: 1.5, { !FidelisAudioDevice.isRunning(hp) }) else {
+            log.warn("headphones: something still plays on them directly; leaving their volume at \(Self.percent(current))")
+            return false
+        }
+        try? await Task.sleep(for: .milliseconds(300))   // what was already sent plays out first
+        // Stopped meanwhile: restore() has put their volume back and must not be undone.
+        guard proceed(), savedLevel != nil else { return false }
+        guard FidelisAudioDevice.deviceID(uid: uid) == hp, !FidelisAudioDevice.isRunning(hp),
+              FidelisAudioDevice.setVolume(hp, 1) else {
+            log.warn("headphones: could not lift their volume")
+            return false
+        }
+        // The volume goes to the headphones over macOS's AVRCP, which the takeover is about to
+        // drop: give the command time to arrive.
+        try? await Task.sleep(for: .milliseconds(500))
+        log.info("headphones: own volume 100% while streaming (was \(Self.percent(original)))")
+        return true
+    }
+
+    /// Whether the headphones' device was there at the last device-list change: the listener acts
+    /// only when it appears. Their device also *disappears* through that listener at the start of
+    /// the takeover, still listed for a moment, and restoring then undid the lift (measured
+    /// 2026-11-20: 0x7F sent, 0x3F sent 140 ms later by the listener).
+    nonisolated private static let headphonesPresent = Atomic<Bool>(false)
+
+    nonisolated private static func headphonesChanged() {
+        guard let d = UserDefaults.standard.dictionary(forKey: levelKey), let uid = d["uid"] as? String else { return }
+        let present = FidelisAudioDevice.deviceID(uid: uid) != nil
+        let was = headphonesPresent.exchange(present, ordering: .relaxed)
+        if present && !was { _ = applySavedLevel() }
+    }
+
+    /// Puts the headphones' old volume back if their device is there. Returns true once done.
+    @discardableResult
+    nonisolated static func applySavedLevel() -> Bool {
+        guard let d = UserDefaults.standard.dictionary(forKey: levelKey),
+              let uid = d["uid"] as? String, let v = d["volume"] as? Double,
+              let hp = FidelisAudioDevice.deviceID(uid: uid) else { return false }
+        if let now = FidelisAudioDevice.volume(hp), abs(now - Float(v)) < 0.005 { return true }
+        return FidelisAudioDevice.setVolume(hp, Float(v))
+    }
+
+    /// The headphones' device comes back when macOS has them again (hand-back, a reconnect, or
+    /// after a crash): set their old volume before anything plays on them at 100%.
+    private func watchHeadphones() {
+        guard levelListener == nil else { return }
+        Self.headphonesPresent.store(savedLevel.map { FidelisAudioDevice.deviceID(uid: $0.uid) != nil } ?? false, ordering: .relaxed)
+        let block: AudioObjectPropertyListenerBlock = { _, _ in OutputRouter.headphonesChanged() }
+        var address = FidelisAudioDevice.globalAddress(kAudioHardwarePropertyDevices)
+        if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, levelQueue, block) == noErr {
+            levelListener = block
+        }
+    }
+
+    /// After a hand-back: the old volume is back (or will be, when the device appears).
+    private func finishHeadphoneLevel() {
+        guard let level = savedLevel else { return }
+        if Self.applySavedLevel() {
+            log.info("headphones: own volume back to \(Self.percent(level.volume))")
+            savedLevel = nil
+            if let block = levelListener {
+                var address = FidelisAudioDevice.globalAddress(kAudioHardwarePropertyDevices)
+                AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, levelQueue, block)
+                levelListener = nil
+            }
+        } else {
+            watchHeadphones()   // not back yet: the listener does it when they are
+        }
+    }
+
+    private static func percent(_ v: Float) -> String { "\(Int((v * 100).rounded()))%" }
 
     /// Each change restarts the device's IO (a short gap), so small changes are ignored.
     func setLatency(_ device: AudioObjectID, microseconds: Int) {

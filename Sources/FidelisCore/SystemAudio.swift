@@ -1,3 +1,4 @@
+import AudioToolbox
 import CoreAudio
 import Foundation
 import Synchronization
@@ -9,6 +10,9 @@ public enum FidelisAudioDevice {
     static let audioSelector: AudioObjectPropertySelector = 0x6664_6175
     /// Custom driver property 'fdlu': output presentation latency in µs.
     static let latencySelector: AudioObjectPropertySelector = 0x6664_6c75
+    /// 'fdhw': 1 while the headphones' own volume follows the slider (the driver then leaves the
+    /// samples unscaled).
+    static let hardwareVolumeSelector: AudioObjectPropertySelector = 0x6664_6877
     public static let installedDriverPath = "/Library/Audio/Plug-Ins/HAL/Fidelis.driver"
 
     public static var isDriverInstalled: Bool { FileManager.default.fileExists(atPath: installedDriverPath) }
@@ -79,6 +83,69 @@ public enum FidelisAudioDevice {
         return withUnsafePointer(to: &value) {
             AudioObjectSetPropertyData(device, &address, 0, nil, UInt32(MemoryLayout<CFPropertyList>.size), $0)
         }
+    }
+
+    static func setHardwareVolume(_ device: AudioObjectID, _ on: Bool) -> OSStatus {
+        var address = globalAddress(hardwareVolumeSelector)
+        var value: CFPropertyList = NSNumber(value: Int32(on ? 1 : 0))
+        return withUnsafePointer(to: &value) {
+            AudioObjectSetPropertyData(device, &address, 0, nil, UInt32(MemoryLayout<CFPropertyList>.size), $0)
+        }
+    }
+
+    /// The device's volume slider, 0…1, as macOS shows it.
+    static let volumeAddress = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwareServiceDeviceProperty_VirtualMainVolume,
+        mScope: kAudioObjectPropertyScopeOutput, mElement: kAudioObjectPropertyElementMain)
+
+    static func volume(_ device: AudioObjectID) -> Float? {
+        var address = volumeAddress
+        var v: Float32 = 0
+        var size = UInt32(MemoryLayout<Float32>.size)
+        return AudioObjectGetPropertyData(device, &address, 0, nil, &size, &v) == noErr ? v : nil
+    }
+
+    @discardableResult
+    static func setVolume(_ device: AudioObjectID, _ value: Float) -> Bool {
+        var address = volumeAddress
+        var v = Float32(min(max(value, 0), 1))
+        return AudioObjectSetPropertyData(device, &address, 0, nil, UInt32(MemoryLayout<Float32>.size), &v) == noErr
+    }
+
+    /// Whether any process is playing on the device.
+    static func isRunning(_ device: AudioObjectID) -> Bool {
+        var address = globalAddress(kAudioDevicePropertyDeviceIsRunningSomewhere)
+        var running: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        return AudioObjectGetPropertyData(device, &address, 0, nil, &size, &running) == noErr && running != 0
+    }
+
+    /// Whether something records from the headphones' microphone: a call or meeting. That
+    /// holds them in the hands-free profile, and macOS then takes the link straight back from
+    /// any takeover (measured 2026-11-20: an active SCO link, every attempt lost).
+    /// `address` is the Bluetooth address as Fidelis lists it ("91-5E-99-C9-D5-AE").
+    public static func microphoneInUse(address: String) -> Bool {
+        let prefix = address.uppercased().replacingOccurrences(of: ":", with: "-") + ":"
+        return allDevices().contains { id in
+            guard let uid = uid(of: id), uid.uppercased().hasPrefix(prefix), hasStreams(id, kAudioObjectPropertyScopeInput) else { return false }
+            return isRunning(id)
+        }
+    }
+
+    static func allDevices() -> [AudioObjectID] {
+        var address = globalAddress(kAudioHardwarePropertyDevices)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size) == noErr else { return [] }
+        var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &ids) == noErr else { return [] }
+        return ids
+    }
+
+    static func hasStreams(_ device: AudioObjectID, _ scope: AudioObjectPropertyScope) -> Bool {
+        var address = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreams, mScope: scope,
+                                                 mElement: kAudioObjectPropertyElementMain)
+        var size: UInt32 = 0
+        return AudioObjectGetPropertyDataSize(device, &address, 0, nil, &size) == noErr && size > 0
     }
 
     static func globalAddress(_ selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
@@ -275,6 +342,23 @@ public final class SystemAudioSource: AudioSource, @unchecked Sendable {
             underruns.add(1, ordering: .relaxed)
             priming = true
         }
+        if fadedFrames < fadeFrames, n > 0 { fadeIn(out, frames: n) }
+    }
+
+    /// Two seconds from silence at the start of a stream: the level the headphones end up at is
+    /// a guess until the listener hears it, so it arrives gently rather than at once.
+    var fadeSeconds = 2.0 { didSet { fadeFrames = Int(Double(sampleRate) * fadeSeconds) } }
+    private lazy var fadeFrames = Int(Double(sampleRate) * fadeSeconds)
+    private var fadedFrames = 0
+
+    private func fadeIn(_ out: UnsafeMutablePointer<Float>, frames: Int) {
+        for i in 0..<frames {
+            let t = Float(min(fadedFrames + i, fadeFrames)) / Float(fadeFrames)
+            let gain = t * t
+            out[2 * i] *= gain
+            out[2 * i + 1] *= gain
+        }
+        fadedFrames += frames
     }
 
     public func didSkip(frames: Int) { fifo.discard(frames) }

@@ -82,7 +82,6 @@ public final class Engine: ObservableObject {
         didSet { UserDefaults.standard.set(source.rawValue, forKey: "source") }
     }
     @Published public private(set) var driverInstalled = FidelisAudioDevice.isDriverInstalled
-    @Published public private(set) var logLines: [Log.Line] = []
 
     public let log = Log()
     public let apiAvailable = FDBTDevice.privateAPIAvailable()
@@ -91,6 +90,7 @@ public final class Engine: ObservableObject {
     private var wantsStreaming = false
     private var recoveries = 0
     private let router: OutputRouter
+    private lazy var headphoneVolume = HeadphoneVolume(log: log)
     private var sinkDelayUs: Int?
 
     public init(helperPath: String) {
@@ -101,13 +101,6 @@ public final class Engine: ObservableObject {
         if let s = UserDefaults.standard.string(forKey: "source").flatMap(SourceChoice.init) { source = s }
         // A previous run that ended without restoring the output (crash, force quit).
         router.restoreIfNeeded()
-        log.onLine = { [weak self] line in
-            Task { @MainActor in
-                guard let self else { return }
-                self.logLines.append(line)
-                if self.logLines.count > 300 { self.logLines.removeFirst(self.logLines.count - 300) }
-            }
-        }
         refreshDevices()
         if !apiAvailable { status = .failed(SessionError.privateAPIUnavailable.userMessage) }
     }
@@ -183,25 +176,43 @@ public final class Engine: ObservableObject {
         }
         wantsStreaming = true
         recoveries = 0
+        status = .connecting(String(localized: "Taking over from macOS…"))
         Task { await run(address: address) }
     }
 
     public func stop() {
+        Task { await stopAndWait() }
+    }
+
+    /// Stops streaming, hands the headphones back and puts the output back; returns when done.
+    public func stopAndWait() async {
         wantsStreaming = false
-        guard let s = session else { status = .idle; return }
-        status = .stopping
-        Task {
-            await s.stop()
-            if session === s { session = nil }
-            status = .idle
-            stats = nil
-            refreshDevices()
+        guard let s = session else {
+            if status.isActive { status = .idle }
             await router.restore()
+            return
         }
+        status = .stopping
+        headphoneVolume.detach()
+        await s.stop()
+        if session === s { session = nil }
+        status = .idle
+        stats = nil
+        refreshDevices()
+        await router.restore()
     }
 
     private func run(address: String) async {
         guard let device = FDBTDevice(address: address) else { status = .failed(SessionError.deviceNotFound.userMessage); return }
+        // A call holds them in the hands-free profile and macOS takes every takeover straight
+        // back; retrying only drops the call's audio again and again.
+        if FidelisAudioDevice.microphoneInUse(address: address) {
+            log.warn("headphones: their microphone is in use (a call); not taking them over")
+            wantsStreaming = false
+            status = .failed(SessionError.headphonesInCall.userMessage)
+            await router.restore()
+            return
+        }
         let s = StreamSession(device: device, helperPath: helperPath, log: log)
         s.mode = quality.mode
         session = s
@@ -216,12 +227,23 @@ public final class Engine: ObservableObject {
             case .streaming:
                 self.status = .streaming
                 self.recoveries = 0
-                if self.source == .system { self.router.routeToFidelis() }
+                if self.source == .system {
+                    if let ch = s.avrcp { self.headphoneVolume.attach(ch) }
+                    self.router.routeToFidelis()
+                }
+                s.avrcp?.onKey = { [log = self.log] key in
+                    if !MediaKeys.press(key) { log.warn("could not pass \(key.rawValue) on to the player") }
+                }
             case .handingBack: if self.status != .stopping, !self.wantsStreaming { self.status = .stopping }
             case .ended: break
             }
         }
-        s.onStats = { [weak self] st in self?.stats = st }
+        // Every published change rebuilds the whole menu and its icon, which shows as a flicker;
+        // the menu only shows the bitrate, so publish only when that changes.
+        s.onStats = { [weak self] st in
+            guard let self, self.stats?.quality != st.quality else { return }
+            self.stats = st
+        }
         s.onSinkDelay = { [weak self] us in
             guard let self else { return }
             self.sinkDelayUs = us
@@ -229,10 +251,16 @@ public final class Engine: ObservableObject {
         }
         s.onUnexpectedEnd = { [weak self] why in
             guard let self, self.session === s else { return }
+            self.headphoneVolume.detach()
             self.session = nil
             self.stats = nil
             // `why` is for the log (StreamSession logged it); the menu gets a plain sentence.
             self.recover(address: address, why: String(localized: "Connection lost"))
+        }
+        // Scaling on until the headphones' volume is known (also undoes a crashed run).
+        if source == .system {
+            HeadphoneVolume.reset()
+            if !StreamSession.usesAVRCP { await router.liftHeadphones(address: address, firstAttempt: recoveries == 0) { [weak self] in self?.wantsStreaming ?? false } }
         }
         do {
             let choice = source
@@ -250,6 +278,10 @@ public final class Engine: ObservableObject {
             updateLatency()
             negotiated = s.negotiated
             if !wantsStreaming { await s.stop(); session = nil; status = .idle }
+        } catch SessionError.cancelled {
+            // stop() asked for it and finishes the job; or the link dropped and onUnexpectedEnd
+            // already chose what comes next.
+            if session === s { session = nil }
         } catch {
             log.error("start failed: \(error)")
             if session === s { session = nil }

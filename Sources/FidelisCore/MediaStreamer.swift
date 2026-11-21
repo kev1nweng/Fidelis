@@ -14,7 +14,12 @@ public final class MediaStreamer: @unchecked Sendable {
         public var skips = 0
     }
 
-    public enum EndReason: Sendable { case stopped, writeFailed(Int32) }
+    public enum EndReason: Sendable { case stopped, writeFailed(Int32), stalled(Double) }
+
+    /// A write that cannot proceed for this long means the link is stuck. Left alone, the
+    /// socket stays blocked for tens of seconds before failing with EPIPE; ending the session
+    /// here lets the engine reconnect instead.
+    public static let stallLimit = 3.0
 
     private let fd: Int32
     private let mtu: Int
@@ -122,6 +127,18 @@ public final class MediaStreamer: @unchecked Sendable {
             }
 
             let w0 = Clock.now
+            switch waitWritable(since: w0) {
+            case .ready: break
+            case .stopped: continue
+            case .failed(let e):
+                log.error("media: socket error: \(String(cString: strerror(e)))")
+                endReason = .writeFailed(e)
+            case .stalled:
+                let secs = Clock.now - w0
+                log.error("media: link stalled, no write for \(String(format: "%.1f", secs)) s")
+                endReason = .stalled(secs)
+            }
+            if case .stopped = endReason {} else { break }
             let written = packet.withUnsafeBufferPointer { write(fd, $0.baseAddress, len) }
             let writeTime = Clock.now - w0
             if written < 0 {
@@ -165,6 +182,26 @@ public final class MediaStreamer: @unchecked Sendable {
             }
         }
         onEnd?(endReason)
+    }
+
+    private enum WaitResult { case ready, stopped, failed(Int32), stalled }
+
+    /// Waits until the socket can take a packet, so the blocking write below never sits on a
+    /// stuck link for longer than `stallLimit`.
+    private func waitWritable(since start: Double) -> WaitResult {
+        var pfd = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+        while true {
+            if stopFlag.get() { return .stopped }
+            pfd.revents = 0
+            let r = poll(&pfd, 1, 100)
+            if r > 0 {
+                if pfd.revents & Int16(POLLOUT) != 0 { return .ready }
+                if pfd.revents & Int16(POLLNVAL) != 0 { return .failed(EBADF) }
+                return .failed(EPIPE)       // POLLERR / POLLHUP without POLLOUT
+            }
+            if r < 0, errno != EINTR, errno != EAGAIN { return .failed(errno) }
+            if Clock.now - start >= Self.stallLimit { return .stalled }
+        }
     }
 
     private func makeRealtime() {

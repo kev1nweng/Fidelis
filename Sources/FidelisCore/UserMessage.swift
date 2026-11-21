@@ -21,6 +21,8 @@ extension SessionError: UserFacingError {
         case .unsupportedFormat: String(localized: "No LDAC format in common with these headphones")
         case .mediaChannel: String(localized: "Couldn't open the audio channel")
         case .signaling: String(localized: "The headphones stopped responding")
+        case .headphonesInCall: String(localized: "The headphones' microphone is in use by a call; end the call or pick another microphone")
+        case .cancelled: String(localized: "Stopped")
         }
     }
 }

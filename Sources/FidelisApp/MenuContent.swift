@@ -115,10 +115,6 @@ struct MenuContent: View {
                             remove: remove)
     }
 
-    private func quit() {
-        guard engine.status.isActive else { NSApp.terminate(nil); return }
-        engine.stop()
-        // Give the hand-back a moment so the headphones return to macOS.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 5) { NSApp.terminate(nil) }
-    }
+    /// The app delegate hands the headphones back before the app exits.
+    private func quit() { NSApp.terminate(nil) }
 }

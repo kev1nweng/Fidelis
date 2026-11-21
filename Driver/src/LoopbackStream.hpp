@@ -37,6 +37,12 @@ public:
     UInt32 GetPresentationLatencyUs() const;
     void SetPresentationLatencyUs(UInt32 latencyUs);
 
+    // While the app drives the headphones' own volume (AVRCP absolute volume), the slider is
+    // applied there, and scaling the samples here as well would apply it twice. Mute stays here.
+    bool GetHardwareVolume() const;
+    void SetHardwareVolume(bool on);
+    void ApplyProcessing(Float32* frames, UInt32 frameCount, UInt32 channelCount) const override;
+
     AudioStreamBasicDescription GetPhysicalFormat() const override;
     AudioStreamBasicDescription GetVirtualFormat() const override;
     std::vector<AudioStreamRangedDescription> GetAvailablePhysicalFormats() const override;
@@ -53,6 +59,13 @@ private:
     const std::weak_ptr<aspl::Device> device_;
     const UInt32 channelCount_;
     std::atomic<UInt32> presentationLatencyUs_{0};
+    std::atomic<bool> hardwareVolume_{false};
+    std::shared_ptr<aspl::VolumeControl> volume_;
+    std::shared_ptr<aspl::MuteControl> mute_;
+
+public:
+    // Kept here too, so ApplyProcessing can skip the volume and still apply the mute.
+    void AttachControls(std::shared_ptr<aspl::VolumeControl> volume, std::shared_ptr<aspl::MuteControl> mute);
 };
 
 } // namespace fidelis

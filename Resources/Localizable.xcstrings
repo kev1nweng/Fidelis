@@ -561,6 +561,22 @@
         }
       }
     },
+    "Stopped": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已停止"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已停止"
+          }
+        }
+      }
+    },
     "System Audio": {
       "localizations": {
         "zh-Hans": {
@@ -685,6 +701,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "耳機沒有回應"
+          }
+        }
+      }
+    },
+    "The headphones' microphone is in use by a call; end the call or pick another microphone": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "耳机麦克风正被通话占用，请结束通话或换用其他麦克风"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "耳機麥克風正被通話佔用，請結束通話或改用其他麥克風"
           }
         }
       }

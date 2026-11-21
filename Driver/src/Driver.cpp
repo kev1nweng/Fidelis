@@ -26,6 +26,8 @@ constexpr UInt32 ChannelCount = 2;
 // Custom device property 'fdlu': output presentation latency in µs (CFNumber), set by the
 // Fidelis app to the Bluetooth path's delay (its buffer plus the headphones' delay report).
 constexpr AudioObjectPropertySelector PresentationLatencySelector = 'fdlu';
+// 1 while the app sets the headphones' own volume over AVRCP: the samples are then not scaled.
+constexpr AudioObjectPropertySelector HardwareVolumeSelector = 'fdhw';
 constexpr SInt32 MaxPresentationLatencyUs = 5'000'000;
 
 // This plug-in's bundle, wherever it's installed.
@@ -89,8 +91,8 @@ std::shared_ptr<aspl::Driver> CreateDriver()
     outputParams.Format = fidelis::Float32Format(DefaultSampleRate, ChannelCount);
     auto outputStream = std::make_shared<fidelis::LoopbackStream>(context, device, outputParams);
     device->AddStreamAsync(outputStream);
-    outputStream->AttachVolumeControl(device->AddVolumeControlAsync(kAudioObjectPropertyScopeOutput));
-    outputStream->AttachMuteControl(device->AddMuteControlAsync(kAudioObjectPropertyScopeOutput));
+    outputStream->AttachControls(device->AddVolumeControlAsync(kAudioObjectPropertyScopeOutput),
+        device->AddMuteControlAsync(kAudioObjectPropertyScopeOutput));
 
     // The app sets how far behind the headphones play (its buffer + their delay), and we report it
     // as output latency, so video players delay the picture to keep lip sync.
@@ -110,6 +112,24 @@ std::shared_ptr<aspl::Driver> CreateDriver()
             }
             if (auto stream = weakOutput.lock()) {
                 stream->SetPresentationLatencyUs(UInt32(std::clamp<SInt32>(latencyUs, 0, MaxPresentationLatencyUs)));
+            }
+        });
+
+    device->RegisterCustomProperty(
+        HardwareVolumeSelector,
+        [weakOutput]() -> CFPropertyListRef {
+            auto stream = weakOutput.lock();
+            SInt32 on = stream && stream->GetHardwareVolume() ? 1 : 0;
+            return CFNumberCreate(kCFAllocatorDefault, kCFNumberSInt32Type, &on);
+        },
+        [weakOutput](CFPropertyListRef value) {
+            SInt32 on = 0;
+            if (!value || CFGetTypeID(value) != CFNumberGetTypeID() ||
+                !CFNumberGetValue(CFNumberRef(value), kCFNumberSInt32Type, &on)) {
+                return;
+            }
+            if (auto stream = weakOutput.lock()) {
+                stream->SetHardwareVolume(on != 0);
             }
         });
 

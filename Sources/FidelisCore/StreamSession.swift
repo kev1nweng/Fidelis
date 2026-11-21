@@ -9,6 +9,10 @@ public enum SessionError: Error, CustomStringConvertible {
     case unsupportedFormat
     case mediaChannel(Int)
     case signaling(SignalingError)
+    /// Their microphone is in use (a call): macOS holds them in the hands-free profile.
+    case headphonesInCall
+    /// stop() was called before streaming began.
+    case cancelled
 
     public var description: String {
         switch self {
@@ -19,6 +23,8 @@ public enum SessionError: Error, CustomStringConvertible {
         case .unsupportedFormat: "No common LDAC format"
         case .mediaChannel(let code): "Could not open the audio channel (code \(code))"
         case .signaling(let e): e.description
+        case .headphonesInCall: "The headphones' microphone is in use (a call)"
+        case .cancelled: "Stopped before streaming began"
         }
     }
 }
@@ -53,17 +59,26 @@ public final class StreamSession {
     public var onUnexpectedEnd: ((String) -> Void)?
 
     private var signaling: SignalingChannel?
+    /// The headphones' AVRCP channel, if we got it (their own volume). Nil when macOS kept it.
+    public private(set) var avrcp: AVRCPChannel?
     private var media: FDBTChannel?
     private var streamer: MediaStreamer?
     private var source: AudioSource?
     private var seid: UInt8 = 0
     private var stopping = false
+    /// The takeover has begun dropping and paging the link, so stopping must hand it back.
+    private var touchedLink = false
+    private var starting = false
     public private(set) var negotiated: Negotiated?
 
     public var preferredSampleRate = 48000
     public var mode: BitrateController.Mode = .adaptive(ceiling: .kbps660) {
         didSet { streamer?.setMode(mode) }
     }
+
+    /// FIDELIS_AVRCP=1: try to hold AVRCP and drive the headphones' volume over it (see start).
+    /// Otherwise their volume is lifted to 100% before the takeover (OutputRouter).
+    nonisolated static let usesAVRCP = ProcessInfo.processInfo.environment["FIDELIS_AVRCP"] == "1"
 
     public init(device: FDBTDevice, helperPath: String, log: Log) {
         self.device = device; self.helperPath = helperPath; self.log = log
@@ -72,13 +87,39 @@ public final class StreamSession {
     // MARK: Start
 
     public func start(source makeSource: (Int) -> AudioSource) async throws {
+        starting = true
+        defer { starting = false }
+        do {
+            try await startSteps(makeSource)
+        } catch {
+            // stop() during start() leaves the hand-back to us: one hand-back, after whatever
+            // the step in flight (a takeover attempt can take the link again) has done.
+            guard stopping else { throw error }
+            await teardown(handBack: true)
+            throw SessionError.cancelled
+        }
+    }
+
+    private func startSteps(_ makeSource: (Int) -> AudioSource) async throws {
         guard FDBTDevice.privateAPIAvailable() else { throw SessionError.privateAPIUnavailable }
-        let sig = try await Takeover(device: device, helperPath: helperPath, log: log) { [weak self] n in
+        try bailIfStopped()
+        touchedLink = true
+        var takeover = Takeover(device: device, helperPath: helperPath, log: log) { [weak self] n in
             self?.onPhase?(.takingOver(attempt: n))
-        }.acquireSignaling()
+        }
+        takeover.isCancelled = { [weak self] in self?.stopping ?? true }
+        let sig = try await takeover.acquireSignaling()
         signaling = sig
+        try bailIfStopped()
         sig.onSinkCommand = { [weak self] cmd in self?.sinkCommand(cmd) }
         sig.onClose = { [weak self] in self?.lost("signaling channel closed") }
+        // AVRCP (the headphones' own volume). Off by default: when the takeover reconnects the
+        // link, bluetoothd opens its own AVRCP the instant the link is up (measured 2026-11-20,
+        // 54 ms before our request), and the request then hangs until its timeout. Taking over in
+        // place, which would leave AVRCP free, does not work on the SIMGOT EH500: it drops the
+        // link itself about 1 s after macOS closes its profiles. FIDELIS_AVRCP=1 tries anyway.
+        let wantsAVRCP = Self.usesAVRCP
+        let avrcpOpen = Task { @MainActor [weak self] in wantsAVRCP ? await self?.openAVRCP() ?? nil : nil }
 
         onPhase?(.negotiating)
         do {
@@ -91,6 +132,11 @@ public final class StreamSession {
             throw error
         }
 
+        if let ch = await avrcpOpen.value {
+            if stopping { ch.close() } else { avrcp = AVRCPChannel(channel: ch, log: log) }
+        }
+        try bailIfStopped()
+
         onPhase?(.openingMedia)
         let (channel, code) = await openMedia()
         guard let channel else {
@@ -99,6 +145,7 @@ public final class StreamSession {
             throw SessionError.mediaChannel(code)
         }
         media = channel
+        try bailIfStopped()
         negotiated?.mtu = Int(channel.outMTU)
         do {
             _ = try await sig.send(.start, [seid << 2])
@@ -122,13 +169,22 @@ public final class StreamSession {
         s.onStats = { [weak self] st in Task { @MainActor in self?.onStats?(st) } }
         s.onEnd = { [weak self] reason in
             Task { @MainActor in
-                if case .writeFailed(let e) = reason { self?.lost("media write failed: \(String(cString: strerror(e)))") }
+                switch reason {
+                case .stopped: break
+                case .writeFailed(let e): self?.lost("media write failed: \(String(cString: strerror(e)))")
+                case .stalled(let secs): self?.lost("media link stalled for \(String(format: "%.1f", secs)) s")
+                }
             }
         }
         streamer = s
         s.start()
         onPhase?(.streaming)
         log.info("streaming LDAC to \(device.name)")
+    }
+
+    /// After each wait in start(): stop() came meanwhile (start() then tears down).
+    private func bailIfStopped() throws {
+        if stopping { throw SessionError.cancelled }
     }
 
     private func negotiate(_ sig: SignalingChannel) async throws {
@@ -162,6 +218,18 @@ public final class StreamSession {
         _ = try await sig.send(.open, [seid << 2])
         negotiated = Negotiated(sampleRate: rate, codecs: codecs, mtu: 0)
         log.info("configured LDAC \(rate) Hz stereo on SEID \(seid)\(delayReporting ? ", delay reporting" : "")")
+    }
+
+    private func openAVRCP() async -> FDBTChannel? {
+        await withCheckedContinuation { cont in
+            let t0 = Date()
+            device.openL2CAPChannel(viaHelper: helperPath, psm: AVRCP.psm, timeout: 5) { [log] ch, code in
+                let dt = String(format: "%.1f", Date().timeIntervalSince(t0))
+                if ch != nil { log.info("avrcp: channel held after \(dt) s") }
+                else { log.warn("avrcp: not available (code \(code), \(dt) s); volume stays in software") }
+                cont.resume(returning: ch)
+            }
+        }
     }
 
     private func openMedia() async -> (FDBTChannel?, Int) {
@@ -202,6 +270,11 @@ public final class StreamSession {
     public func stop() async {
         guard !stopping else { return }
         stopping = true
+        if starting {
+            // start() notices between steps, tears down and hands back; wait for that.
+            _ = await waitFor(timeout: 90) { !starting }
+            return
+        }
         streamer?.stop()
         streamer = nil
         if let sig = signaling, seid != 0 {
@@ -218,10 +291,13 @@ public final class StreamSession {
         source = nil
         media?.close()
         media = nil
+        avrcp?.close()
+        avrcp = nil
         signaling?.onClose = nil
         signaling?.close()
         signaling = nil
-        if handBack {
+        if handBack, touchedLink {
+            touchedLink = false
             onPhase?(.handingBack)
             await Takeover.handBack(device, log: log)
         }

@@ -32,8 +32,25 @@ final class FrameFIFOTests: XCTestCase {
 }
 
 final class SystemAudioSourceTests: XCTestCase {
+    func testFadesInFromSilence() {
+        let src = SystemAudioSource(sampleRate: 48000, targetMs: 10, log: Log())
+        src.fadeSeconds = 0.01   // 480 frames
+        let out = UnsafeMutablePointer<Float>.allocate(capacity: 256)
+        defer { out.deallocate() }
+        let ones = [Float](repeating: 1, count: 2 * 2000)
+        ones.withUnsafeBufferPointer { _ = src.testFIFO.write($0) }
+        src.render(out, frames: 128)
+        XCTAssertEqual(out[0], 0)
+        XCTAssertLessThan(out[2 * 127], 0.1)
+        XCTAssertGreaterThan(out[2 * 127], out[2 * 64])
+        for _ in 0..<3 { src.render(out, frames: 128) }   // past 480 frames
+        XCTAssertEqual(out[2 * 127], 1)
+        XCTAssertEqual(out[2 * 127 + 1], 1)
+    }
+
     func testPrimesThenPlaysThenRefillsAfterUnderrun() {
         let src = SystemAudioSource(sampleRate: 48000, targetMs: 10, log: Log())   // 480 frames
+        src.fadeSeconds = 0
         let out = UnsafeMutablePointer<Float>.allocate(capacity: 256)
         defer { out.deallocate() }
         let ones = [Float](repeating: 1, count: 2 * 400)
@@ -57,6 +74,7 @@ final class SystemAudioSourceTests: XCTestCase {
 
     func testBacklogDropsBackToTarget() {
         let src = SystemAudioSource(sampleRate: 48000, targetMs: 10, log: Log())   // high = 480 + 2880
+        src.fadeSeconds = 0
         let out = UnsafeMutablePointer<Float>.allocate(capacity: 256)
         defer { out.deallocate() }
         let lots = [Float](repeating: 1, count: 2 * 6000)

@@ -67,6 +67,34 @@ UInt32 LoopbackStream::GetLatency() const
     return UInt32(std::lround(presentationLatencyUs_.load() * CurrentSampleRate() / 1e6));
 }
 
+void LoopbackStream::AttachControls(std::shared_ptr<aspl::VolumeControl> volume, std::shared_ptr<aspl::MuteControl> mute)
+{
+    volume_ = volume;
+    mute_ = mute;
+    AttachVolumeControl(volume);
+    AttachMuteControl(mute);
+}
+
+bool LoopbackStream::GetHardwareVolume() const
+{
+    return hardwareVolume_.load();
+}
+
+void LoopbackStream::SetHardwareVolume(bool on)
+{
+    hardwareVolume_.store(on);
+}
+
+void LoopbackStream::ApplyProcessing(Float32* frames, UInt32 frameCount, UInt32 channelCount) const
+{
+    if (!hardwareVolume_.load(std::memory_order_relaxed) && volume_) {
+        volume_->ApplyProcessing(frames, frameCount, channelCount);
+    }
+    if (mute_) {
+        mute_->ApplyProcessing(frames, frameCount, channelCount);
+    }
+}
+
 UInt32 LoopbackStream::GetPresentationLatencyUs() const
 {
     return presentationLatencyUs_.load();
