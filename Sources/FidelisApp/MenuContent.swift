@@ -34,8 +34,7 @@ struct MenuContent: View {
             Picker("Bitrate", selection: $engine.quality) {
                 ForEach(Engine.QualityChoice.allCases) { q in
                     switch q {
-                    case .auto: Text("Auto (Recommended)").tag(q)
-                    case .autoAggressive: Text("Auto (Aggressive)").tag(q)
+                    case .auto: Text("Auto").tag(q)
                     default: Text("\(q.title) kbps").tag(q)
                     }
                 }

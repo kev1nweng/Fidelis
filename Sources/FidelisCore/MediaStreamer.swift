@@ -93,7 +93,7 @@ public final class MediaStreamer: @unchecked Sendable {
             return
         }
         let modeLabel: String = switch controller.mode {
-        case .adaptive(_, let aggressive): aggressive ? "auto (aggressive)" : "auto"
+        case .adaptive: "auto"
         case .fixed(let q): "fixed \(q.label)"
         }
         log.info("media: LDAC \(encoder.bitrateKbps) kbps @ \(sampleRate) Hz, MTU \(mtu), bitrate \(modeLabel)")
@@ -151,13 +151,15 @@ public final class MediaStreamer: @unchecked Sendable {
             if let abr, Clock.now >= nextABR {
                 nextABR = max(nextABR + LDACABR.intervalSeconds, Clock.now - LDACABR.intervalSeconds)
                 let bytes = queue.queuedBytes()
-                let depth = (bytes + lastPacketBytes - 1) / lastPacketBytes
-                winMaxQueue = max(winMaxQueue, depth)
+                // Logged in packets, as before; the ABR takes its own unit (LDACABR.depth).
+                let packets = (bytes + lastPacketBytes - 1) / lastPacketBytes
+                winMaxQueue = max(winMaxQueue, packets)
                 let before = encoder.quality
-                if case .adaptive(let ceiling, let aggressive) = controller.mode,
-                   encoder.adapt(abr, queueDepth: depth, ceiling: aggressive ? ceiling : backoff.ceiling(ceiling, at: Clock.now)) {
+                if case .adaptive(let ceiling) = controller.mode,
+                   encoder.adapt(abr, queueDepth: LDACABR.depth(queuedBytes: bytes),
+                                 ceiling: backoff.ceiling(ceiling, at: Clock.now)) {
                     stats.qualityChanges += 1
-                    log.info("media: rung -> \(encoder.quality.label) (ABR, \(depth) packets queued)")
+                    log.info("media: rung -> \(encoder.quality.label) (ABR, \(packets) packets queued)")
                     if let hold = backoff.changed(from: before, to: encoder.quality, at: Clock.now) {
                         log.info("media: \(before.label) undone soon after reaching it; not trying it again for \(Int(hold)) s")
                     }
@@ -221,7 +223,7 @@ public final class MediaStreamer: @unchecked Sendable {
                 stats.queuePackets = winMaxQueue
                 if let m = lock.withLock({ () -> BitrateController.Mode? in defer { pendingMode = nil }; return pendingMode }) {
                     controller.mode = m
-                    if case .adaptive(let ceiling, _) = m {
+                    if case .adaptive(let ceiling) = m {
                         if abr == nil { abr = LDACABR() }
                         if encoder.quality > ceiling { encoder.setQuality(ceiling); stats.qualityChanges += 1 }
                     } else {

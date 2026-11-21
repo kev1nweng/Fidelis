@@ -64,8 +64,8 @@ public final class LDACEncoder {
         }
     }
 
-    /// One step of Sony's adaptive bitrate (see LDACABR) for `queueDepth` packets waiting to be
-    /// sent, kept at or below `ceiling`. Returns true when the rung changed.
+    /// One step of Sony's adaptive bitrate (see LDACABR) for a send queue of `queueDepth`
+    /// (LDACABR.depth), kept at or below `ceiling`. Returns true when the rung changed.
     @discardableResult
     func adapt(_ abr: LDACABR, queueDepth: Int, ceiling: LDACQuality) -> Bool {
         guard let handle else { return false }
@@ -100,18 +100,37 @@ public final class LDACEncoder {
 }
 
 /// Sony's LDAC adaptive bitrate (libldac/abr), as Android runs it for LDAC "best effort": called
-/// every 20 ms with the number of packets waiting to be sent, it steps down as soon as that queue
-/// grows (two rungs at once from 990/660 when it is critical) and climbs back only after seconds
-/// with an empty queue, waiting longer each time a climb had to be undone.
+/// every 20 ms with the depth of the send queue, it steps down as soon as that queue grows (two
+/// rungs at once from 990/660 when it is critical) and climbs back only after seconds with an
+/// empty queue, waiting longer each time a climb had to be undone.
+///
+/// What counts as depth is PipeWire's calibration (spa/plugins/bluez5/a2dp-codec-ldac.c), whose
+/// sender is placed as ours is: all it sees is a socket of about 8 kB. Depth is the unsent bytes
+/// in units of 1280, rounded down, with thresholds 6/4/3. libldac's own defaults (6/4/2, in
+/// packets) are for Android's queue, which sits above L2CAP and the controller and stays empty
+/// until about eleven packets are held below it (BTA_AV_QUEUE_DATA_CHK_NUM plus the controller's
+/// buffers). Our socket has one packet of bluetoothd's below it, so counted in packets with those
+/// defaults, a radio that looks away for 25 ms at 660 kbps read as three packets and cost a rung:
+/// 68 of 74 step-downs on 2026-11-21, four out of five of them over within 0.2 s.
 final class LDACABR {
     static let intervalSeconds = 0.020
+    /// PipeWire's LDAC_ABR_MAX_PACKET_NBYTES: one unit of queue depth.
+    static let depthUnitBytes = 1280
+    /// PipeWire's LDAC_ABR_THRESHOLD_CRITICAL / _DANGEROUSTREND / _SAFETY4HQSQ.
+    static let thresholds = (critical: UInt32(6), dangerousTrend: UInt32(4), safetyForHQSQ: UInt32(3))
     let handle: HANDLE_LDAC_ABR
 
     init?() {
         guard let h = ldac_ABR_get_handle() else { return nil }
-        guard ldac_ABR_Init(h, UInt32(Self.intervalSeconds * 1000)) == 0 else { ldac_ABR_free_handle(h); return nil }
+        guard ldac_ABR_Init(h, UInt32(Self.intervalSeconds * 1000)) == 0,
+              ldac_ABR_set_thresholds(h, Self.thresholds.critical, Self.thresholds.dangerousTrend,
+                                      Self.thresholds.safetyForHQSQ) == 0
+        else { ldac_ABR_free_handle(h); return nil }
         handle = h
     }
+
+    /// The queue depth libldac's ABR is given for `queuedBytes` waiting in the socket.
+    static func depth(queuedBytes: Int) -> Int { max(queuedBytes, 0) / depthUnitBytes }
 
     deinit { ldac_ABR_free_handle(handle) }
 }

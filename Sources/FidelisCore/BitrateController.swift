@@ -5,9 +5,9 @@ import Foundation
 /// first sign of backpressure and climbs back slowly.
 public struct BitrateController: Sendable {
     public enum Mode: Equatable, Sendable {
-        /// Adapt between the lowest rung and `ceiling`. `aggressive` runs libldac ABR as Android
-        /// does, without ClimbBackoff: it retries a higher rung every few seconds.
-        case adaptive(ceiling: LDACQuality, aggressive: Bool = false)
+        /// Adapt between the lowest rung and `ceiling`: libldac ABR, with ClimbBackoff holding back
+        /// climbs that keep failing.
+        case adaptive(ceiling: LDACQuality)
         /// Hold one rung (still steps down in an emergency, and returns afterwards).
         case fixed(LDACQuality)
     }
@@ -34,14 +34,14 @@ public struct BitrateController: Sendable {
     public init(mode: Mode) {
         self.mode = mode
         switch mode {
-        case .adaptive(let c, _): quality = min(c, .kbps660)
+        case .adaptive(let c): quality = min(c, .kbps660)
         case .fixed(let q): quality = q
         }
     }
 
     private var target: LDACQuality {
         switch mode {
-        case .adaptive(let c, _): c
+        case .adaptive(let c): c
         case .fixed(let q): q
         }
     }

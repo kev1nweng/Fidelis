@@ -38,6 +38,52 @@ final class AdaptiveBitrateTests: XCTestCase {
         XCTAssertEqual(enc.quality, .kbps660)
         XCTAssertEqual(highest, .kbps660)
     }
+
+    /// Depth is PipeWire's: unsent bytes in units of 1280, rounded down.
+    func testQueueDepthCountsUnsentBytesInUnitsOf1280() {
+        XCTAssertEqual(LDACABR.depth(queuedBytes: 0), 0)
+        XCTAssertEqual(LDACABR.depth(queuedBytes: 1279), 0)     // a packet on its way is not a queue
+        XCTAssertEqual(LDACABR.depth(queuedBytes: 5119), 3)
+        XCTAssertEqual(LDACABR.depth(queuedBytes: 5120), 4)
+        XCTAssertEqual(LDACABR.depth(queuedBytes: 8192), 6)     // the whole socket: critical
+    }
+
+    /// A radio that looks away for a few packets' time and comes back (most of what the link does,
+    /// 2026-11-21) is not a reason to leave 660 kbps.
+    func testAShortHiccupAt660KeepsTheRung() throws {
+        let enc = try XCTUnwrap(LDACEncoder(sampleRate: 48000, mtu: 679, quality: .kbps660))
+        let abr = try XCTUnwrap(LDACABR())
+        let packet = 672
+        for _ in 0..<50 { enc.adapt(abr, queueDepth: LDACABR.depth(queuedBytes: 0), ceiling: .kbps660) }
+        // Six packets (48 ms of audio) pile up, then drain over the next 100 ms.
+        for queued in [2, 4, 6, 5, 4, 3, 2, 1, 0] {
+            XCTAssertFalse(enc.adapt(abr, queueDepth: LDACABR.depth(queuedBytes: queued * packet), ceiling: .kbps660))
+        }
+        for _ in 0..<50 { enc.adapt(abr, queueDepth: 0, ceiling: .kbps660) }
+        XCTAssertEqual(enc.quality, .kbps660)
+    }
+
+    /// A queue that reaches 5120 bytes at 660 kbps (about 60 ms behind) steps down at once.
+    func testADeepQueueAt660StepsDown() throws {
+        let enc = try XCTUnwrap(LDACEncoder(sampleRate: 48000, mtu: 679, quality: .kbps660))
+        let abr = try XCTUnwrap(LDACABR())
+        XCTAssertFalse(enc.adapt(abr, queueDepth: LDACABR.depth(queuedBytes: 5119), ceiling: .kbps660))
+        XCTAssertTrue(enc.adapt(abr, queueDepth: LDACABR.depth(queuedBytes: 5120), ceiling: .kbps660))
+        XCTAssertEqual(enc.quality, .kbps492)
+    }
+
+    /// A link that cannot carry the rung shows as a queue that stays: libldac steps down when its
+    /// average over half a second is above 1.5, here four packets waiting all the time.
+    func testAQueueThatStaysStepsDown() throws {
+        let enc = try XCTUnwrap(LDACEncoder(sampleRate: 48000, mtu: 679, quality: .kbps660))
+        let abr = try XCTUnwrap(LDACABR())
+        var changed = false
+        for _ in 0..<40 where !changed {      // 0.8 s
+            changed = enc.adapt(abr, queueDepth: LDACABR.depth(queuedBytes: 4 * 672), ceiling: .kbps660)
+        }
+        XCTAssertTrue(changed)
+        XCTAssertEqual(enc.quality, .kbps492)
+    }
 }
 
 final class ClimbBackoffTests: XCTestCase {
