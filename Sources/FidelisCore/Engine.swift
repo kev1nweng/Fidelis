@@ -91,6 +91,7 @@ public final class Engine: ObservableObject {
     private var recoveries = 0
     private let router: OutputRouter
     private lazy var headphoneVolume = HeadphoneVolume(log: log)
+    private lazy var softwareVolume = SoftwareVolume(log: log)
     private var sinkDelayUs: Int?
 
     public init(helperPath: String) {
@@ -194,6 +195,7 @@ public final class Engine: ObservableObject {
         }
         status = .stopping
         headphoneVolume.detach()
+        softwareVolume.detach()
         await s.stop()
         if session === s { session = nil }
         status = .idle
@@ -252,6 +254,7 @@ public final class Engine: ObservableObject {
         s.onUnexpectedEnd = { [weak self] why in
             guard let self, self.session === s else { return }
             self.headphoneVolume.detach()
+            self.softwareVolume.detach()
             self.session = nil
             self.stats = nil
             // `why` is for the log (StreamSession logged it); the menu gets a plain sentence.
@@ -268,8 +271,12 @@ public final class Engine: ObservableObject {
             try await s.start { [weak self] rate in
                 switch choice {
                 case .system:
-                    let src = SystemAudioSource(sampleRate: rate, log: log)
+                    // Its buffer holds the cushion the streamer sends ahead, plus the usual 40 ms.
+                    let src = SystemAudioSource(sampleRate: rate, cushionMs: Int(StreamSession.cushionSeconds * 1000), log: log)
                     self?.systemSource = src
+                    // Before it plays: the slider's curve is applied here (not with AVRCP, which
+                    // moves the headphones' own volume instead).
+                    if !StreamSession.usesAVRCP { self?.softwareVolume.attach(src) }
                     return src
                 case .chime: return ChimeSource(sampleRate: rate)
                 case .silence: return SilenceSource(sampleRate: rate)
@@ -279,10 +286,12 @@ public final class Engine: ObservableObject {
             negotiated = s.negotiated
             if !wantsStreaming { await s.stop(); session = nil; status = .idle }
         } catch SessionError.cancelled {
+            softwareVolume.detach()
             // stop() asked for it and finishes the job; or the link dropped and onUnexpectedEnd
             // already chose what comes next.
             if session === s { session = nil }
         } catch {
+            softwareVolume.detach()
             log.error("start failed: \(error)")
             if session === s { session = nil }
             if wantsStreaming { recover(address: address, why: userMessage(for: error)) } else { status = .idle; await router.restore() }
@@ -291,11 +300,12 @@ public final class Engine: ObservableObject {
 
     private weak var systemSource: SystemAudioSource?
 
-    /// What the Fidelis device reports as its latency: our buffer, the send lead, and the
+    /// What the Fidelis device reports as its latency: our buffer (with the cushion), and the
     /// headphones' own delay (reported, or a typical A2DP sink's when they don't say).
     private func updateLatency() {
         guard source == .system, let src = systemSource, let id = FidelisAudioDevice.id else { return }
-        let total = src.bufferedMicroseconds + 10_000 + (sinkDelayUs ?? 150_000)
+        // The send lead is part of the buffer now (the cushion).
+        let total = src.bufferedMicroseconds + (sinkDelayUs ?? 150_000)
         router.setLatency(id, microseconds: total)
     }
 

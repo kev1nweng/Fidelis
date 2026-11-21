@@ -120,6 +120,36 @@ public enum FidelisAudioDevice {
         return AudioObjectGetPropertyData(device, &address, 0, nil, &size, &running) == noErr && running != 0
     }
 
+    // MARK: Volume curve
+
+    /// Range of the Fidelis slider while Fidelis scales the samples itself ('fdhw' on): linear
+    /// in dB from -40 dB to 0 dB, so each step is the same change in loudness (2.5 dB per
+    /// volume key) and the levels people listen at sit mid-slider. The driver scales by the
+    /// slider value as an amplitude (libASPL VolumeControl::ApplyProcessing), whatever dB it
+    /// reports: there, 20% is -14 dB and with the headphones at full volume everything usable
+    /// was crowded into the bottom fifth (measured 2026-11-20 on the SIMGOT EH500: listened at
+    /// 6%, -24 dB; 20% too loud). A -96 dB floor overcorrected and pushed it into the top fifth.
+    static let sliderFloorDecibels: Float = -40
+
+    /// Gain in dB for a slider position 0…1 (nil: silence).
+    static func decibels(forSlider x: Float) -> Float? {
+        x > 0 ? sliderFloorDecibels * (1 - min(x, 1)) : nil
+    }
+
+    /// Linear gain for a slider position 0…1 (0 is silence).
+    static func gain(forSlider x: Float) -> Float {
+        decibels(forSlider: x).map { pow(10, $0 / 20) } ?? 0
+    }
+
+    /// The slider position that gives `decibels` on our curve.
+    static func slider(forDecibels decibels: Float) -> Float {
+        min(max(1 - decibels / sliderFloorDecibels, 0), 1)
+    }
+
+    /// The driver multiplies by the slider value, so the same loudness as `x` on our curve
+    /// sits at its gain.
+    static func driverSlider(matching x: Float) -> Float { gain(forSlider: x) }
+
     /// Whether something records from the headphones' microphone: a call or meeting. That
     /// holds them in the hands-free profile, and macOS then takes the link straight back from
     /// any takeover (measured 2026-11-20: an active SCO link, every attempt lost).
@@ -263,14 +293,22 @@ public final class SystemAudioSource: AudioSource, @unchecked Sendable {
     private let underruns = Atomic<Int>(0)
     private let drops = Atomic<Int>(0)
 
-    public init(sampleRate: Int, targetMs: Int = 40, log: Log) {
+    /// `cushionMs`: audio the streamer reads ahead and sends into the headphones' buffer
+    /// (MediaStreamer.cushionSeconds). The FIFO starts with it on top of `targetMs`; once it has
+    /// gone ahead only `targetMs` stays here, so a refill after an underrun waits for that alone
+    /// (waiting for the whole target again would add the cushion to the delay for good).
+    public init(sampleRate: Int, targetMs: Int = 40, cushionMs: Int = 0, log: Log) {
         self.sampleRate = sampleRate
         self.log = log
-        targetFrames = sampleRate * targetMs / 1000
+        targetFrames = sampleRate * (targetMs + cushionMs) / 1000
+        refillFrames = sampleRate * targetMs / 1000
         fifo = FrameFIFO(capacityFrames: sampleRate)   // one second
     }
 
-    /// Delay from a sample reaching the device to it leaving us: the FIFO's target level.
+    private let refillFrames: Int
+    private var started = false
+
+    /// Delay from a sample reaching the device to it leaving our hands (here, or sent ahead).
     public var bufferedMicroseconds: Int { targetFrames * 1_000_000 / sampleRate }
 
     public func start() throws {
@@ -326,11 +364,12 @@ public final class SystemAudioSource: AudioSource, @unchecked Sendable {
     public func render(_ out: UnsafeMutablePointer<Float>, frames: Int) {
         let level = fifo.level
         if priming {
-            if level < targetFrames {
+            if level < (started ? refillFrames : targetFrames) {
                 out.update(repeating: 0, count: frames * 2)
                 return
             }
             priming = false
+            started = true
         }
         if level > highFrames {
             fifo.discard(level - targetFrames)
@@ -343,6 +382,28 @@ public final class SystemAudioSource: AudioSource, @unchecked Sendable {
             priming = true
         }
         if fadedFrames < fadeFrames, n > 0 { fadeIn(out, frames: n) }
+        if n > 0 { applyVolume(out, frames: n) }
+    }
+
+    /// The slider's gain while Fidelis scales the samples itself (SoftwareVolume). Any thread.
+    public func setVolumeGain(_ gain: Float) { targetGain.store(gain.bitPattern, ordering: .relaxed) }
+
+    private let targetGain = Atomic<UInt32>(Float(1).bitPattern)
+    /// Nil until the first buffer, which starts at the target: never a ramp down from full scale.
+    private var currentGain: Float?
+
+    /// Moves to the slider's gain across the buffer, so a change does not click.
+    private func applyVolume(_ out: UnsafeMutablePointer<Float>, frames: Int) {
+        let target = Float(bitPattern: targetGain.load(ordering: .relaxed))
+        let start = currentGain ?? target
+        if target == 1, start == 1 { currentGain = 1; return }
+        let step = (target - start) / Float(frames)
+        for i in 0..<frames {
+            let g = start + step * Float(i + 1)
+            out[2 * i] *= g
+            out[2 * i + 1] *= g
+        }
+        currentGain = target
     }
 
     /// Two seconds from silence at the start of a stream: the level the headphones end up at is

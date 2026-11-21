@@ -43,31 +43,38 @@ final class OutputRouter {
     /// Back to the remembered output, waiting up to `timeout` for it to (re)appear. Leaves the
     /// output alone if the user has meanwhile picked something other than Fidelis.
     func restore(timeout: TimeInterval = 12) async {
-        defer { finishHeadphoneLevel() }
-        guard let uid = saved else { return }
+        rememberLiftedSlider()
         let deadline = Date().addingTimeInterval(timeout)
-        while true {
-            let current = FidelisAudioDevice.defaultOutput
-            if let current, current != FidelisAudioDevice.id {
-                // Someone else (the user, or macOS when the device went away) chose; but macOS
-                // falling back to the speakers during the takeover is not a choice, so still
-                // prefer the remembered device once it is back.
-                if FidelisAudioDevice.uid(of: current) == uid { break }
+        if let uid = saved {
+            while true {
+                let current = FidelisAudioDevice.defaultOutput
+                if let current, current != FidelisAudioDevice.id {
+                    // Someone else (the user, or macOS when the device went away) chose; but macOS
+                    // falling back to the speakers during the takeover is not a choice, so still
+                    // prefer the remembered device once it is back.
+                    if FidelisAudioDevice.uid(of: current) == uid { break }
+                }
+                if let target = FidelisAudioDevice.deviceID(uid: uid) {
+                    // Their old volume first, then the audio.
+                    _ = Self.applySavedLevel()
+                    if FidelisAudioDevice.setDefaultOutput(target) { log.info("output: back to \(uid)") }
+                    break
+                }
+                if Date() >= deadline {
+                    log.warn("output: \(uid) did not come back; leaving the output as it is")
+                    break
+                }
+                try? await Task.sleep(for: .milliseconds(300))
             }
-            if let target = FidelisAudioDevice.deviceID(uid: uid) {
-                // Their old volume first, then the audio.
-                _ = Self.applySavedLevel()
-                if FidelisAudioDevice.setDefaultOutput(target) { log.info("output: back to \(uid)") }
-                break
-            }
-            if Date() >= deadline {
-                log.warn("output: \(uid) did not come back; leaving the output as it is")
-                break
-            }
-            try? await Task.sleep(for: .milliseconds(300))
+            saved = nil
+            lastLatencyUs = nil
         }
-        saved = nil
-        lastLatencyUs = nil
+        // Their own volume waits for them too, whatever the output: the listener that would set
+        // it later dies with the app, and quitting left them at 100% (2026-11-20).
+        if let level = savedLevel {
+            _ = await waitFor(timeout: max(0, deadline.timeIntervalSinceNow)) { FidelisAudioDevice.deviceID(uid: level.uid) != nil }
+        }
+        finishHeadphoneLevel()
     }
 
     /// Synchronous variant for launch: only if the device is there now.
@@ -119,6 +126,31 @@ final class OutputRouter {
 
     static func headphonesUID(_ address: String) -> String { address.uppercased() + ":output" }
 
+    /// Whether this run lifted them: the slider is then saved as the level to start at next time.
+    private var lifted = false
+    /// Stored in dB, not as a slider position: a later change of the curve must not turn a
+    /// saved position into a louder level. (The first key, "liftedFidelisVolume", held a slider
+    /// position on a -96 dB curve and is ignored.)
+    nonisolated private static let liftedLevelKey = "liftedFidelisDecibels"
+    /// -30 dB until the listener has picked a level with the headphones at full volume: below
+    /// the quietest level chosen on the SIMGOT EH500 (-24 dB).
+    static let defaultLiftedDecibels: Float = -30
+
+    static var liftedSlider: Float {
+        let db = (UserDefaults.standard.object(forKey: liftedLevelKey) as? Double).map(Float.init) ?? defaultLiftedDecibels
+        return FidelisAudioDevice.slider(forDecibels: db)
+    }
+
+    private func rememberLiftedSlider() {
+        guard lifted else { return }
+        lifted = false
+        guard let id = FidelisAudioDevice.id, let v = FidelisAudioDevice.volume(id) else { return }
+        // Silence is not a level to start at; the floor is.
+        let db = FidelisAudioDevice.decibels(forSlider: v) ?? FidelisAudioDevice.sliderFloorDecibels
+        UserDefaults.standard.set(Double(db), forKey: Self.liftedLevelKey)
+        log.info("output: will start at \(Int(db.rounded())) dB next time")
+    }
+
     /// Before a takeover of `address`. `firstAttempt` sets the Fidelis slider (not on reconnects,
     /// where the listener may have moved it since). Returns false when the volume was left alone.
     @discardableResult
@@ -130,9 +162,6 @@ final class OutputRouter {
         let original = savedLevel.flatMap { $0.uid == uid ? $0.volume : nil } ?? current
         savedLevel = (uid, original)
         watchHeadphones()
-        if firstAttempt {
-            FidelisAudioDevice.setVolume(fidelis, max(0, original - 1.0 / 16))
-        }
         routeToFidelis()
         guard await waitFor(timeout: 1.5, { !FidelisAudioDevice.isRunning(hp) }) else {
             log.warn("headphones: something still plays on them directly; leaving their volume at \(Self.percent(current))")
@@ -141,11 +170,18 @@ final class OutputRouter {
         try? await Task.sleep(for: .milliseconds(300))   // what was already sent plays out first
         // Stopped meanwhile: restore() has put their volume back and must not be undone.
         guard proceed(), savedLevel != nil else { return false }
+        // The slider first: at full volume the headphones are far louder than at their old
+        // level (the SIMGOT EH500: 20% on the driver's curve, -53 dB, was too loud), so streaming
+        // starts at the level last chosen while lifted, or quiet.
+        if firstAttempt {
+            FidelisAudioDevice.setVolume(fidelis, Self.liftedSlider)
+        }
         guard FidelisAudioDevice.deviceID(uid: uid) == hp, !FidelisAudioDevice.isRunning(hp),
               FidelisAudioDevice.setVolume(hp, 1) else {
             log.warn("headphones: could not lift their volume")
             return false
         }
+        lifted = true
         // The volume goes to the headphones over macOS's AVRCP, which the takeover is about to
         // drop: give the command time to arrive.
         try? await Task.sleep(for: .milliseconds(500))

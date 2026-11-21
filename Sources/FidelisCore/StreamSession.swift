@@ -72,6 +72,11 @@ public final class StreamSession {
     public private(set) var negotiated: Negotiated?
 
     public var preferredSampleRate = 48000
+    /// Audio sent ahead into the headphones' buffer (MediaStreamer.cushionSeconds). The SIMGOT
+    /// EH500 holds writes for 100–300 ms several times a minute (2026-11-20), each heard as a
+    /// tear with the old 10 ms lead.
+    public static let cushionSeconds = 0.2
+    public var cushionSeconds = StreamSession.cushionSeconds
     public var mode: BitrateController.Mode = .adaptive(ceiling: .kbps660) {
         didSet { streamer?.setMode(mode) }
     }
@@ -166,6 +171,7 @@ public final class StreamSession {
         }
         source = src
         let s = MediaStreamer(fd: channel.fd, mtu: Int(channel.outMTU), source: src, mode: mode, log: log)
+        s.cushionSeconds = cushionSeconds
         s.onStats = { [weak self] st in Task { @MainActor in self?.onStats?(st) } }
         s.onEnd = { [weak self] reason in
             Task { @MainActor in

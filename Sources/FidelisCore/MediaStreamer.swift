@@ -18,8 +18,10 @@ public final class MediaStreamer: @unchecked Sendable {
 
     /// A write that cannot proceed for this long means the link is stuck. Left alone, the
     /// socket stays blocked for tens of seconds before failing with EPIPE; ending the session
-    /// here lets the engine reconnect instead.
-    public static let stallLimit = 3.0
+    /// here lets the engine reconnect instead. Not shorter: the SIMGOT EH500 often holds writes
+    /// for about 2.5 s and then carries on, while a reconnect costs about 25 s of silence
+    /// (measured 2026-11-20 with a 3 s limit: sessions lost every 7 to 36 s).
+    public static let stallLimit = 8.0
 
     private let fd: Int32
     private let mtu: Int
@@ -43,6 +45,16 @@ public final class MediaStreamer: @unchecked Sendable {
     }
 
     public func setMode(_ mode: BitrateController.Mode) { lock.withLock { pendingMode = mode } }
+
+    /// How far ahead of real time to send once the stream has settled: audio already in the
+    /// headphones' buffer, which carries playback through a link that stops for less than this.
+    /// The source must hold this much (SystemAudioSource's buffer): a live source cannot be read
+    /// ahead of what has been played into it (CodecBlue tried a 250 ms lead without, notes
+    /// 13.16: the reads came back short). Set before start().
+    public var cushionSeconds = 0.010
+    /// Above real time while the cushion builds: gentle, because a burst on a weak link is
+    /// what makes it stall (2%: 200 ms built over 10 s).
+    var cushionGrowth = 0.02
 
     public func start() {
         let t = Thread { [weak self] in self?.run() }
@@ -83,7 +95,12 @@ public final class MediaStreamer: @unchecked Sendable {
         let t0 = Clock.now
         var framesSent = 0          // PCM frames covered by packets already written
         var pendingFrames = 0       // PCM frames fed into the encoder for the packet being built
-        let leadSeconds = 0.010     // encode/send this far ahead of real time
+        // Encode/send this far ahead of real time: from 10 ms (LDAC needs little to start) up to
+        // the cushion.
+        var leadSeconds = min(0.010, cushionSeconds)
+        let cushion = cushionSeconds
+        let growth = cushionGrowth
+        let blockSeconds = Double(block) / Double(sampleRate)
 
         var stats = Stats(quality: encoder.quality)
         var winStart = Clock.now, winBytes = 0, winPackets = 0
@@ -113,6 +130,7 @@ public final class MediaStreamer: @unchecked Sendable {
 
             source.render(pcm, frames: block)
             pendingFrames += block
+            if leadSeconds < cushion { leadSeconds = min(cushion, leadSeconds + blockSeconds * growth) }
             guard let (payload, _) = encoder.encode(pcm) else { continue }
 
             // RTP header (RFC 3550): V=2, PT=96, sequence, timestamp in PCM frames, SSRC 1.

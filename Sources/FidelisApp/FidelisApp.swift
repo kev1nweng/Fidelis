@@ -80,7 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             reply()
         }
         // A hand-back that hangs must not keep the app from quitting.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { reply() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 45) { reply() }
         return .terminateLater
     }
 }
