@@ -16,9 +16,17 @@ if [[ $EUID -ne 0 ]]; then
         exec sudo "$0" "$@"
     fi
     # No terminal to type a sudo password into: ask with the macOS admin dialog.
+    # AppleScript quotes each argument itself, so paths with spaces or non-ASCII survive.
     script="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-    args=$(printf ' %q' "$script" "$@")
-    exec osascript -e "do shell script \"${args//\"/\\\"}\" with prompt \"Fidelis wants to install its audio driver.\" with administrator privileges"
+    exec osascript - "$script" "$@" <<'APPLESCRIPT'
+on run argv
+    set cmd to ""
+    repeat with a in argv
+        set cmd to cmd & quoted form of (a as text) & " "
+    end repeat
+    do shell script cmd with prompt "Fidelis wants to install its audio driver." with administrator privileges
+end run
+APPLESCRIPT
 fi
 
 restart_coreaudiod() {
