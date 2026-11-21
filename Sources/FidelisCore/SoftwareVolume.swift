@@ -1,8 +1,8 @@
 import CoreAudio
 import Foundation
 
-/// Applies the Fidelis slider to the samples in Fidelis itself, on a curve linear in dB
-/// (FidelisAudioDevice.gain(forSlider:)), instead of in the driver: the driver's curve leaves
+/// Applies the Fidelis slider to the samples in Fidelis itself, on the cubic curve
+/// of ALSA and PulseAudio (FidelisAudioDevice.gain(forSlider:)), instead of in the driver: the driver's curve leaves
 /// almost no usable range once the headphones' own volume is at 100%.
 ///
 /// Safety: the source gets the gain first and the driver stops scaling after, so the change is

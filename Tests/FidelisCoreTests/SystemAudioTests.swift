@@ -88,15 +88,17 @@ final class SystemAudioSourceTests: XCTestCase {
         XCTAssertEqual(out[0], 1)
     }
 
-    func testSliderCurveIsLinearInDecibels() {
+    func testSliderCurveIsCubic() {
         XCTAssertEqual(FidelisAudioDevice.gain(forSlider: 0), 0)
         XCTAssertEqual(FidelisAudioDevice.gain(forSlider: 1), 1)
-        XCTAssertEqual(20 * log10(FidelisAudioDevice.gain(forSlider: 0.5)), -20, accuracy: 0.01)
-        XCTAssertEqual(20 * log10(FidelisAudioDevice.gain(forSlider: 0.0625)), -37.5, accuracy: 0.01)
-        XCTAssertEqual(FidelisAudioDevice.slider(forDecibels: -30), 0.25, accuracy: 1e-6)
-        XCTAssertEqual(FidelisAudioDevice.slider(forDecibels: -200), 0)
+        XCTAssertEqual(FidelisAudioDevice.gain(forSlider: 0.5), 0.125, accuracy: 1e-6)
+        XCTAssertEqual(FidelisAudioDevice.decibels(forSlider: 0.1)!, -60, accuracy: 0.01)
+        XCTAssertNil(FidelisAudioDevice.decibels(forSlider: 0))
+        XCTAssertEqual(20 * log10(FidelisAudioDevice.gain(forSlider: 0.25)), FidelisAudioDevice.decibels(forSlider: 0.25)!, accuracy: 0.01)
+        XCTAssertEqual(FidelisAudioDevice.slider(forDecibels: -18), 0.5012, accuracy: 1e-3)
+        XCTAssertEqual(FidelisAudioDevice.slider(forDecibels: 6), 1)
         // The driver scales by the slider value: the same loudness is at the gain.
-        XCTAssertEqual(FidelisAudioDevice.driverSlider(matching: 0.5), 0.1, accuracy: 1e-4)
+        XCTAssertEqual(FidelisAudioDevice.driverSlider(matching: 0.5), 0.125, accuracy: 1e-6)
     }
 
     func testPrimesThenPlaysThenRefillsAfterUnderrun() {

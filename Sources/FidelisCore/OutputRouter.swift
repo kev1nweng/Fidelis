@@ -145,8 +145,8 @@ final class OutputRouter {
         guard lifted else { return }
         lifted = false
         guard let id = FidelisAudioDevice.id, let v = FidelisAudioDevice.volume(id) else { return }
-        // Silence is not a level to start at; the floor is.
-        let db = FidelisAudioDevice.decibels(forSlider: v) ?? FidelisAudioDevice.sliderFloorDecibels
+        // Silence is not a level to start at; the default is.
+        let db = FidelisAudioDevice.decibels(forSlider: v) ?? Self.defaultLiftedDecibels
         UserDefaults.standard.set(Double(db), forKey: Self.liftedLevelKey)
         log.info("output: will start at \(Int(db.rounded())) dB next time")
     }

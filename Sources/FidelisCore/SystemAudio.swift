@@ -122,28 +122,26 @@ public enum FidelisAudioDevice {
 
     // MARK: Volume curve
 
-    /// Range of the Fidelis slider while Fidelis scales the samples itself ('fdhw' on): linear
-    /// in dB from -40 dB to 0 dB, so each step is the same change in loudness (2.5 dB per
-    /// volume key) and the levels people listen at sit mid-slider. The driver scales by the
-    /// slider value as an amplitude (libASPL VolumeControl::ApplyProcessing), whatever dB it
-    /// reports: there, 20% is -14 dB and with the headphones at full volume everything usable
-    /// was crowded into the bottom fifth (measured 2026-11-20 on the SIMGOT EH500: listened at
-    /// 6%, -24 dB; 20% too loud). A -96 dB floor overcorrected and pushed it into the top fifth.
-    static let sliderFloorDecibels: Float = -40
-
-    /// Gain in dB for a slider position 0…1 (nil: silence).
+    /// The Fidelis slider while Fidelis scales the samples itself ('fdhw' on) is cubic: the gain
+    /// is the slider position cubed, so the position is proportional to loudness as the ear hears
+    /// it. This is the mapping ALSA (alsamixer, volume_mapping.c) and PulseAudio/PipeWire
+    /// (pa_sw_volume_from_linear) use for their sliders: 50% is -18 dB, 25% is -36 dB, 10% is
+    /// -60 dB, and 0 is silence. The driver itself scales by the slider value as an amplitude
+    /// (libASPL VolumeControl::ApplyProcessing), whatever dB it reports, which crowds every
+    /// usable level into the bottom of the slider once the headphones are at full volume.
     static func decibels(forSlider x: Float) -> Float? {
-        x > 0 ? sliderFloorDecibels * (1 - min(x, 1)) : nil
+        x > 0 ? 60 * log10(min(x, 1)) : nil
     }
 
     /// Linear gain for a slider position 0…1 (0 is silence).
     static func gain(forSlider x: Float) -> Float {
-        decibels(forSlider: x).map { pow(10, $0 / 20) } ?? 0
+        let x = min(max(x, 0), 1)
+        return x * x * x
     }
 
     /// The slider position that gives `decibels` on our curve.
     static func slider(forDecibels decibels: Float) -> Float {
-        min(max(1 - decibels / sliderFloorDecibels, 0), 1)
+        min(pow(10, min(decibels, 0) / 60), 1)
     }
 
     /// The driver multiplies by the slider value, so the same loudness as `x` on our curve
