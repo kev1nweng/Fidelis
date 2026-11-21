@@ -2,7 +2,7 @@
 
 **简体中文 / [English](README.en.md)**
 
-让 Mac 通过自带蓝牙以 LDAC 推流的极简菜单栏工具。
+在 macOS 27 与 Apple 芯片上原生推流 LDAC：一个跑在用户态的 A2DP 发射端，直接驱动 Mac 自带蓝牙。不用发射器，不装内核扩展，SIP 保持开启。
 
 ## 功能
 

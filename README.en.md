@@ -2,7 +2,7 @@
 
 **[简体中文](README.md) / English**
 
-A minimal macOS menu bar app that streams LDAC over the Mac's built-in Bluetooth.
+Native LDAC streaming on macOS 27 and Apple silicon: a user-space A2DP source driving the Mac's built-in Bluetooth. No dongle, no kernel extension, SIP stays on.
 
 ## Features
 
