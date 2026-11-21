@@ -126,13 +126,25 @@ final class SystemAudioSourceTests: XCTestCase {
     }
 
     func testBacklogDropsBackToTarget() {
-        let src = SystemAudioSource(sampleRate: 48000, targetMs: 10, log: Log())   // high = 480 + 2880
+        let src = SystemAudioSource(sampleRate: 48000, targetMs: 10, log: Log())   // high = 480 + 12000
         src.fadeSeconds = 0
         let out = UnsafeMutablePointer<Float>.allocate(capacity: 256)
         defer { out.deallocate() }
-        let lots = [Float](repeating: 1, count: 2 * 6000)
+        let lots = [Float](repeating: 1, count: 2 * 14000)
         lots.withUnsafeBufferPointer { _ = src.testFIFO.write($0) }
         src.render(out, frames: 128)
         XCTAssertEqual(src.testFIFO.level, 480 - 128)
+    }
+
+    /// What a short link pause leaves behind is kept for the streamer to catch up on.
+    func testKeepsTheBacklogOfAShortPause() {
+        let src = SystemAudioSource(sampleRate: 48000, targetMs: 10, log: Log())
+        src.fadeSeconds = 0
+        let out = UnsafeMutablePointer<Float>.allocate(capacity: 256)
+        defer { out.deallocate() }
+        let pause = [Float](repeating: 1, count: 2 * (480 + 4800))     // 100 ms on top of the target
+        pause.withUnsafeBufferPointer { _ = src.testFIFO.write($0) }
+        src.render(out, frames: 128)
+        XCTAssertEqual(src.testFIFO.level, 480 + 4800 - 128)
     }
 }

@@ -19,11 +19,18 @@ public final class MediaStreamer: @unchecked Sendable {
     public enum EndReason: Sendable { case stopped, writeFailed(Int32), stalled(Double) }
 
     /// A write that cannot proceed for this long means the link is stuck. Left alone, the
-    /// socket stays blocked for tens of seconds before failing with EPIPE; ending the session
-    /// here lets the engine reconnect instead. Not shorter: the SIMGOT EH500 often holds writes
-    /// for about 2.5 s and then carries on, while a reconnect costs about 25 s of silence
-    /// (measured 2026-11-20 with a 3 s limit: sessions lost every 7 to 36 s).
+    /// socket stays blocked for tens of seconds before failing with EPIPE (M0); ending the session
+    /// here lets the engine reconnect instead. Not short: links do pause for seconds and then
+    /// carry on, while a reconnect costs about 25 s of silence, so giving up early loses more
+    /// than it saves (a 3 s limit lost sessions every 7 to 36 s, 2026-11-20).
     public static let stallLimit = 8.0
+
+    /// How far behind the stream may fall (after the link paused) and still be caught up by
+    /// sending faster; further behind, the oldest audio is skipped so playback stays live. This is
+    /// Android's rule: its A2DP source queues up to two encoder ticks of packets (about 220 ms)
+    /// and flushes the queue beyond that (btif_a2dp_source.cc, MAX_OUTPUT_A2DP_FRAME_QUEUE_SZ).
+    /// SystemAudioSource keeps the same backlog for it.
+    public static let maxBacklogSeconds = 0.25
 
     private let fd: Int32
     private let mtu: Int
@@ -55,7 +62,7 @@ public final class MediaStreamer: @unchecked Sendable {
     /// 13.16: the reads came back short). Set before start().
     public var cushionSeconds = 0.010
     /// Above real time while the cushion builds: gentle, because a burst on a weak link is
-    /// what makes it stall (2%: 200 ms built over 10 s).
+    /// what makes it stall (2%: 10 ms more built in half a second).
     var cushionGrowth = 0.02
 
     public func start() {
@@ -124,7 +131,7 @@ public final class MediaStreamer: @unchecked Sendable {
                 continue
             }
             let lag = now - due
-            if lag > 0.25 {
+            if lag > Self.maxBacklogSeconds {
                 // Far behind (stall): skip ahead rather than burst, so playback stays live.
                 let skip = Int(lag * Double(sampleRate)) / block * block
                 framesSent += skip

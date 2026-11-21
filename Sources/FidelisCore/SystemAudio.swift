@@ -266,7 +266,11 @@ public final class SystemAudioSource: AudioSource, @unchecked Sendable {
     public let sampleRate: Int
     /// Frames the FIFO aims to hold: poll interval plus the HAL's IO cycle, with margin.
     public let targetFrames: Int
-    private var highFrames: Int { targetFrames + sampleRate * 60 / 1000 }
+    /// Above this the backlog is dropped. It matches the backlog the streamer catches up on
+    /// after a link pause (MediaStreamer.maxBacklogSeconds), so what piles up during a pause is
+    /// sent rather than thrown away: dropping at the first sign of a backlog throws away exactly
+    /// the audio a pause left behind (CodecBlue notes 13.23, error 2: 86 skips heard as clicks).
+    private var highFrames: Int { targetFrames + Int(Double(sampleRate) * MediaStreamer.maxBacklogSeconds) }
 
     private let log: Log
     private let fifo: FrameFIFO
