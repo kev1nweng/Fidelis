@@ -13,6 +13,12 @@ struct MenuContent: View {
         Toggle("LDAC Output", isOn: Binding(get: { engine.status.isActive }, set: { _ in engine.toggle() }))
             .disabled(!engine.apiAvailable || engine.selectedAddress == nil || engine.status == .stopping)
 
+        // Right after hearing a dropout: a line in the log file to line it up with the stream's
+        // per-second statistics.
+        if engine.status == .streaming {
+            Button("Mark Glitch") { engine.log.warn("MARK: glitch heard just before this") }
+        }
+
         Divider()
 
         Menu("Headphones") {

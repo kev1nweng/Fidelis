@@ -337,6 +337,22 @@
         }
       }
     },
+    "Mark Glitch": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "标记卡顿"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "標記卡頓"
+          }
+        }
+      }
+    },
     "Negotiating LDAC…": {
       "localizations": {
         "zh-Hans": {
