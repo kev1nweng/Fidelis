@@ -57,7 +57,7 @@ macOS 只会用 SBC 和 AAC 连接蓝牙耳机。Fidelis 先让 macOS 断开耳�
 
 系统音频来自一个 Audio Server 插件（HAL 驱动）提供的虚拟输出设备。驱动按 sample time 保存混音后的音频，App 通过自定义设备属性读回，驱动会核对调用方的代码签名。设备和发送端用的是同一个时钟，因此不需要重采样。
 
-详细设计见 [docs/DESIGN.md](docs/DESIGN.md)，可行性结论见 [docs/M0-findings.md](docs/M0-findings.md)。
+详细设计见 [docs/DESIGN.md](docs/DESIGN.md)。
 
 ## 致谢
 

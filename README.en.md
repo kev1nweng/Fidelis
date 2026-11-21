@@ -57,7 +57,7 @@ macOS only speaks SBC and AAC to Bluetooth headphones. Fidelis has macOS drop th
 
 System audio comes from a virtual output device provided by an Audio Server plug-in (HAL driver). The driver keeps the mixed audio by sample time and the app reads it back through a custom device property, which the driver only serves to callers with the right code signature. The device and the sender run on the same clock, so no resampling is needed.
 
-See [docs/DESIGN.md](docs/DESIGN.md) for the design and [docs/M0-findings.md](docs/M0-findings.md) for the feasibility findings (both in Chinese).
+See [docs/DESIGN.md](docs/DESIGN.md) for the design (in Chinese).
 
 ## Acknowledgements
 

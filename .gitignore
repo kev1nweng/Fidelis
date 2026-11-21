@@ -14,3 +14,7 @@ build/
 
 # Probe app bundle and logs
 /out/
+
+# 实验数据与测量脚本，只留在本地 | Experiment data and measurement scripts (local only)
+/docs/M0-findings.md
+/scripts/linkquality.sh
