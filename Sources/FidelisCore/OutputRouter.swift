@@ -41,8 +41,10 @@ final class OutputRouter {
     }
 
     /// Back to the remembered output, waiting up to `timeout` for it to (re)appear. Leaves the
-    /// output alone if the user has meanwhile picked something other than Fidelis.
-    func restore(timeout: TimeInterval = 12) async {
+    /// output alone if the user has meanwhile picked something other than Fidelis. When it does
+    /// not come back, `fallBack` moves the output to the built-in speakers, as macOS does when
+    /// an output goes away, rather than leave it on Fidelis with nothing to hear.
+    func restore(timeout: TimeInterval = 12, fallBack: Bool = false) async {
         rememberLiftedSlider()
         let deadline = Date().addingTimeInterval(timeout)
         if let uid = saved {
@@ -61,7 +63,12 @@ final class OutputRouter {
                     break
                 }
                 if Date() >= deadline {
-                    log.warn("output: \(uid) did not come back; leaving the output as it is")
+                    if fallBack, FidelisAudioDevice.defaultOutput == FidelisAudioDevice.id,
+                       let speakers = FidelisAudioDevice.builtInOutput, FidelisAudioDevice.setDefaultOutput(speakers) {
+                        log.info("output: \(uid) is gone; back to the built-in output")
+                    } else {
+                        log.warn("output: \(uid) did not come back; leaving the output as it is")
+                    }
                     break
                 }
                 try? await Task.sleep(for: .milliseconds(300))
@@ -132,8 +139,9 @@ final class OutputRouter {
     /// saved position into a louder level. (The first key, "liftedFidelisVolume", held a slider
     /// position on a -96 dB curve and is ignored.)
     nonisolated private static let liftedLevelKey = "liftedFidelisDecibels"
-    /// -30 dB until the listener has picked a level with the headphones at full volume: below
-    /// the quietest level chosen on the SIMGOT EH500 (-24 dB).
+    /// -30 dB until the listener has picked a level with the headphones at full volume. Their
+    /// full volume is unknown and differs by model, so the first stream starts low (about 32% on
+    /// the cubic slider) and fades in.
     static let defaultLiftedDecibels: Float = -30
 
     static var liftedSlider: Float {
@@ -171,8 +179,7 @@ final class OutputRouter {
         // Stopped meanwhile: restore() has put their volume back and must not be undone.
         guard proceed(), savedLevel != nil else { return false }
         // The slider first: at full volume the headphones are far louder than at their old
-        // level (the SIMGOT EH500: 20% on the driver's curve, -53 dB, was too loud), so streaming
-        // starts at the level last chosen while lifted, or quiet.
+        // level, so streaming starts at the level last chosen while lifted, or quiet.
         if firstAttempt {
             FidelisAudioDevice.setVolume(fidelis, Self.liftedSlider)
         }

@@ -26,4 +26,8 @@ enum MediaKeys {
         }
         return send?(command, nil) ?? false
     }
+
+    /// Pauses whatever is playing (never starts it, unlike the toggle).
+    @discardableResult
+    static func pause() -> Bool { send?(1, nil) ?? false }   // kMRPause
 }

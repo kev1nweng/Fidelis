@@ -160,6 +160,18 @@ public enum FidelisAudioDevice {
         }
     }
 
+    /// The Mac's own speakers (or whatever built-in output it has).
+    static var builtInOutput: AudioObjectID? {
+        allDevices().first { d in
+            guard hasStreams(d, kAudioObjectPropertyScopeOutput) else { return false }
+            var address = globalAddress(kAudioDevicePropertyTransportType)
+            var transport: UInt32 = 0
+            var size = UInt32(MemoryLayout<UInt32>.size)
+            return AudioObjectGetPropertyData(d, &address, 0, nil, &size, &transport) == noErr
+                && transport == kAudioDeviceTransportTypeBuiltIn
+        }
+    }
+
     static func allDevices() -> [AudioObjectID] {
         var address = globalAddress(kAudioHardwarePropertyDevices)
         var size: UInt32 = 0

@@ -1,4 +1,5 @@
 #import "FidelisBluetooth.h"
+#include <poll.h>
 #import "Private.h"
 #import <objc/runtime.h>
 #include <spawn.h>
@@ -69,6 +70,26 @@ extern char **environ;
 }
 @end
 
+@implementation FDBTConnectionWatch {
+    void (^_handler)(NSString *);
+    IOBluetoothUserNotification *_note;
+}
+
+- (instancetype)initWithHandler:(void (^)(NSString *))handler {
+    if ((self = [super init])) {
+        _handler = [handler copy];
+        _note = [IOBluetoothDevice registerForConnectNotifications:self selector:@selector(connected:device:)];
+    }
+    return self;
+}
+
+- (void)connected:(IOBluetoothUserNotification *)note device:(IOBluetoothDevice *)device {
+    if (device.addressString) _handler(device.addressString);
+}
+
+- (void)dealloc { [_note unregister]; }
+@end
+
 @implementation FDBTDevice {
     IOBluetoothDevice *_dev;
     NSMutableSet *_waiters;
@@ -106,6 +127,17 @@ extern char **environ;
 - (NSString *)name { return _dev.name ?: self.address; }
 - (BOOL)isConnected { return _dev.isConnected; }
 - (BOOL)isAudio { return _dev.deviceClassMajor == kBluetoothDeviceClassMajorAudio; }
+
+- (int)highPriorityState {
+    if (![_dev respondsToSelector:@selector(highPriority)]) return -1;
+    return [_dev highPriority] ? 1 : 0;
+}
+
+- (int)setHighPriorityState:(BOOL)on {
+    if (![_dev respondsToSelector:@selector(setHighPriority:)]) return -1;
+    [_dev setHighPriority:on];
+    return self.highPriorityState;
+}
 
 - (void)openConnectionWithCompletion:(void (^)(int))completion {
     if (_dev.isConnected) {
@@ -262,8 +294,21 @@ int FDBTHelperMain(NSString *address, uint16_t psm) {
             }
         }];
     };
+    // Only once the link is up: bluetoothd refuses an open to a device that is not connected
+    // ("could not connect ... on PSM:0x0019") and then never calls back (2026-11-21).
     [dev openConnectionWithCompletion:^(int status) { attempt(); }];
-    while (!finished) CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+    // Never outlive the parent or the deadline: a page whose callback never comes kept a helper
+    // waiting here for over an hour after its app had gone (2026-11-21), its pending open on
+    // PSM 0x19 still registered with bluetoothd.
+    while (!finished) {
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+        if (deadline.timeIntervalSinceNow < -2) { code = FDBTOpenTimedOut; break; }
+        struct pollfd p = { .fd = control, .events = POLLIN, .revents = 0 };
+        if (poll(&p, 1, 0) > 0) {
+            char c;
+            if (p.revents & (POLLHUP | POLLERR) || recv(control, &c, 1, MSG_PEEK | MSG_DONTWAIT) == 0) return 2;
+        }
+    }
 
     FDBTHelperReply reply = { .code = (int32_t)code, .mtu = channel ? channel.outMTU : 0 };
     sendFD(control, reply, channel ? channel.fd : -1);

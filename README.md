@@ -10,6 +10,8 @@
 - 虚拟输出设备「Fidelis」：音量键、控制中心照常可用，并向系统上报延迟，视频音画同步
 - 自适应码率：链路拥塞时自动降档，稳定后再升回（990 / 660 / 492 / 396 / 330 kbps）
 - 推流开始时自动切换默认输出，结束后交还耳机并切回原输出
+- 独占模式（默认开启）：推流期间暂时关闭 macOS 自带的蓝牙音频，接管瞬间完成，并直接调节耳机自身的音量；结束后自动恢复
+- 耳机关机或离开范围时自动停止并暂停播放，耳机重新连上后询问是否继续 LDAC 推流
 - 原生、极简的菜单栏控制，支持简体中文、繁體中文和 English
 - 不需要麦克风或屏幕录制权限
 
@@ -27,11 +29,20 @@
    ```
 3. 首次启动时允许蓝牙权限。
 4. 在菜单栏图标的「音源」菜单中选择「安装音频驱动…」。这一步需要管理员密码，并会重启 coreaudiod（所有声音会中断一秒左右）。
-5. 在「耳机」菜单中选好耳机，打开「LDAC 输出」。
+5. 在「耳机」菜单中选好耳机，打开「LDAC 输出」。第一次推流时会再要一次管理员密码，用来安装独占模式的辅助程序（见下文）。
 
 > 未签名的版本中，音频驱动只能按 bundle id 核对来访的 App。在签名版本发布之前，请只在自己信任的电脑上使用。
 >
 > 移除驱动：在「音源」菜单中选择「移除音频驱动…」。
+
+### 独占模式
+
+开启后，Fidelis 在推流期间关闭 macOS 自带的蓝牙音频（A2DP 和 AVRCP），停止时再打开。这样 macOS 不会和 Fidelis 争抢耳机，Fidelis 也能像 macOS 一样直接调节耳机自身的音量。
+
+- 用的是 bluetoothd 自带的服务开关（`/Library/Preferences/com.apple.MobileBluetooth.debug`），改完要重启 bluetoothd，因此每次开始和停止推流时，所有蓝牙设备会断开几秒。
+- 推流期间，macOS 无法用任何蓝牙耳机或音箱播放音频；停止或退出 Fidelis 后恢复。若 Fidelis 中途崩溃，下次启动时恢复。
+- 辅助程序 `/Library/PrivilegedHelperTools/fidelis-bt-audio` 归 root 所有，另有一条 sudoers 规则（`/etc/sudoers.d/fidelis-bt-audio`），只允许当前用户免密码执行它的 `off` 和 `on`。
+- 在菜单中关闭「独占模式」会卸载辅助程序和 sudoers 规则（需管理员密码）。之后 Fidelis 会回到“先让 macOS 断开耳机，再抢先建立连接”的旧方式。
 
 ## 从源码构建
 
@@ -53,7 +64,7 @@ scripts/selftest.sh <耳机地址> 30 system               # 实机推流 30 秒
 
 ## 原理
 
-macOS 只会用 SBC 和 AAC 连接蓝牙耳机。Fidelis 先让 macOS 断开耳机，再抢在 bluetoothd 之前在 PSM 0x19 上建立 AVDTP 信令通道，自己完成编解码协商（LDAC），再打开媒体通道，用 [libldac](https://android.googlesource.com/platform/external/libldac) 编码并按实时节奏发送 RTP 包。停止时把耳机交还给 macOS。
+macOS 只会用 SBC 和 AAC 连接蓝牙耳机。独占模式下 macOS 不会建立自己的 A2DP 连接，Fidelis 直接在现有链路上建立信令通道；否则 Fidelis 先让 macOS 断开耳机，再抢在 bluetoothd 之前在 PSM 0x19 上建立 AVDTP 信令通道，自己完成编解码协商（LDAC），再打开媒体通道，用 [libldac](https://android.googlesource.com/platform/external/libldac) 编码并按实时节奏发送 RTP 包。停止时把耳机交还给 macOS。
 
 系统音频来自一个 Audio Server 插件（HAL 驱动）提供的虚拟输出设备。驱动按 sample time 保存混音后的音频，App 通过自定义设备属性读回，驱动会核对调用方的代码签名。设备和发送端用的是同一个时钟，因此不需要重采样。
 

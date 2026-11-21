@@ -30,6 +30,10 @@ typedef NS_ENUM(long, FDBTOpenCode) {
 @property (nonatomic, readonly) BOOL isConnected;
 /// Major device class is audio/video.
 @property (nonatomic, readonly) BOOL isAudio;
+/// IOBluetooth's private connection priority for this device: -1 if not available, else 0/1.
+@property (nonatomic, readonly) int highPriorityState;
+/// Sets it; returns the state read back (-1 if not available).
+- (int)setHighPriorityState:(BOOL)on;
 
 + (NSArray<FDBTDevice *> *)pairedDevices;
 + (nullable FDBTDevice *)deviceWithAddress:(NSString *)address;
@@ -49,6 +53,13 @@ typedef NS_ENUM(long, FDBTOpenCode) {
 /// executable lives at `helperPath`; it stays alive for as long as the returned channel is open.
 - (void)openL2CAPChannelViaHelper:(NSString *)helperPath psm:(uint16_t)psm timeout:(NSTimeInterval)timeout
                        completion:(void (^)(FDBTChannel *_Nullable channel, long code))completion;
+@end
+
+/// Watches for Bluetooth devices connecting (IOBluetooth's connect notifications, delivered on
+/// the main run loop). Keep the object for as long as you want the calls; it stops when released.
+@interface FDBTConnectionWatch : NSObject
+- (instancetype)initWithHandler:(void (^)(NSString *address))handler;
+- (instancetype)init NS_UNAVAILABLE;
 @end
 
 /// Entry point for the helper executable: opens `psm` on `address` and hands the socket to the

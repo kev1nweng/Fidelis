@@ -9,6 +9,9 @@ import FidelisBluetooth
 ///
 /// Each attempt opens signaling from a fresh helper process: a request that never answers leaves
 /// its client session busy (code 24) for good, and a fresh process is a fresh session.
+///
+/// With macOS's own A2DP turned off (MacBluetoothAudio), bluetoothd never opens signaling, so
+/// the first attempt opens it on the link as it is, without dropping it.
 @MainActor
 struct Takeover {
     let device: FDBTDevice
@@ -18,6 +21,9 @@ struct Takeover {
     var maxAttempts = 6
     /// Checked between attempts: the session was stopped, give up.
     var isCancelled: () -> Bool = { false }
+    /// False for a retry after a lost stream: headphones that are no longer connected were
+    /// switched off or went out of range, and paging them would only time out, again and again.
+    var pagesHeadphones = true
 
     init(device: FDBTDevice, helperPath: String, log: Log, onAttempt: @escaping (Int) -> Void) {
         self.device = device; self.helperPath = helperPath; self.log = log; self.onAttempt = onAttempt
@@ -25,10 +31,17 @@ struct Takeover {
 
     func acquireSignaling() async throws -> SignalingChannel {
         var lastWhy = "unknown"
+        let macAudioOff = MacBluetoothAudio.isOff
         for attempt in 1...maxAttempts {
             guard !isCancelled() else { throw SessionError.cancelled }
+            if !pagesHeadphones, !device.isConnected {
+                log.info("takeover \(attempt): the headphones are not connected; not paging them")
+                throw SessionError.takeoverFailed("headphones not connected")
+            }
             onAttempt(attempt)
-            if device.isConnected {
+            if macAudioOff, attempt == 1, device.isConnected {
+                log.info("takeover 1: macOS's Bluetooth audio is off; opening signaling on the link as it is")
+            } else if device.isConnected {
                 // closeConnection only drops the link for a client that asked for it, so register
                 // our interest first (returns at once on a link that is already up).
                 _ = await withCheckedContinuation { cont in device.openConnection { cont.resume(returning: $0) } }
@@ -72,8 +85,13 @@ struct Takeover {
 
     private func backoff(_ attempt: Int) -> Double { min(4, 0.5 * Double(attempt)) }
 
-    /// Drops our link and reconnects so macOS's own profiles come back.
+    /// Drops our link and reconnects so macOS's own profiles come back. With macOS's own A2DP
+    /// off there is nothing to bring back on a link that is still up: it keeps its call profile.
     static func handBack(_ device: FDBTDevice, log: Log) async {
+        if MacBluetoothAudio.isOff, device.isConnected {
+            log.info("left \(device.name) connected to macOS (its Bluetooth audio is off)")
+            return
+        }
         if device.isConnected {
             _ = await withCheckedContinuation { cont in device.openConnection { cont.resume(returning: $0) } }
             device.closeConnection()

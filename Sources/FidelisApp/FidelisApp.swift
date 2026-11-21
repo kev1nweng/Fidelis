@@ -12,6 +12,10 @@ struct FidelisApp: App {
         let engine = Engine(helperPath: FidelisApp.helperPath)
         _engine = StateObject(wrappedValue: engine)
         AppDelegate.engine = engine
+        engine.onHeadphonesReturned = { [weak engine] h in
+            guard let engine else { return }
+            Self.askToStream(engine, h)
+        }
         // Headless self-test: FIDELIS_SELFTEST=<seconds> streams to the selected headphones for
         // that long, then quits (used by scripts/selftest.sh).
         if let secs = ProcessInfo.processInfo.environment["FIDELIS_SELFTEST"].flatMap(Double.init) {
@@ -25,6 +29,20 @@ struct FidelisApp: App {
                 Self.selftestWatch(e, until: Date().addingTimeInterval(secs + 90), streamFor: secs)
             }
         }
+    }
+
+    /// The headphones that went away mid-stream are back: offer to stream to them again.
+    @MainActor
+    private static func askToStream(_ engine: Engine, _ h: Engine.Headphones) {
+        NSApp.activate()
+        let alert = NSAlert()
+        alert.messageText = String(localized: "\(h.name) is back")
+        alert.informativeText = String(localized: "Stream to them with LDAC again?")
+        alert.addButton(withTitle: String(localized: "Stream with LDAC"))
+        alert.addButton(withTitle: String(localized: "Not Now"))
+        guard alert.runModal() == .alertFirstButtonReturn, !engine.status.isActive else { return }
+        engine.selectedAddress = h.address
+        engine.start()
     }
 
     @MainActor

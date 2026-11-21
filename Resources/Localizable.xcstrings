@@ -1,6 +1,22 @@
 {
   "sourceLanguage": "en",
   "strings": {
+    "%@ is back": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 已重新连接"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 已重新連線"
+          }
+        }
+      }
+    },
     "%@ kbps": {
       "localizations": {
         "zh-Hans": {
@@ -161,6 +177,22 @@
         }
       }
     },
+    "Exclusive Mode": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "独占模式"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "獨佔模式"
+          }
+        }
+      }
+    },
     "Handing back to macOS…": {
       "localizations": {
         "zh-Hans": {
@@ -205,6 +237,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "找不到耳機"
+          }
+        }
+      }
+    },
+    "High Connection Priority (Experimental)": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "高连接优先级（实验性）"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "高連線優先權（實驗性）"
           }
         }
       }
@@ -337,22 +385,6 @@
         }
       }
     },
-    "Mark Glitch": {
-      "localizations": {
-        "zh-Hans": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "标记卡顿"
-          }
-        },
-        "zh-Hant": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "標記卡頓"
-          }
-        }
-      }
-    },
     "Negotiating LDAC…": {
       "localizations": {
         "zh-Hans": {
@@ -401,6 +433,22 @@
         }
       }
     },
+    "Not Now": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "以后再说"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "以後再說"
+          }
+        }
+      }
+    },
     "Off": {
       "localizations": {
         "zh-Hans": {
@@ -445,6 +493,22 @@
           "stringUnit": {
             "state": "translated",
             "value": "正在開啟音訊通道…"
+          }
+        }
+      }
+    },
+    "Pausing macOS Bluetooth audio…": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在暂停 macOS 蓝牙音频…"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在暫停 macOS 藍牙音訊…"
           }
         }
       }
@@ -589,6 +653,38 @@
           "stringUnit": {
             "state": "translated",
             "value": "已停止"
+          }
+        }
+      }
+    },
+    "Stream to them with LDAC again?": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "要重新用 LDAC 串流到这副耳机吗？"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "要重新用 LDAC 串流到這副耳機嗎？"
+          }
+        }
+      }
+    },
+    "Stream with LDAC": {
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用 LDAC 串流"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用 LDAC 串流"
           }
         }
       }

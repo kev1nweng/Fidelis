@@ -6,6 +6,8 @@
 
 @interface IOBluetoothDevice (FidelisPrivate)
 - (id)classicPeer;   // CBClassicPeer
+- (void)setHighPriority:(BOOL)on;   // v20@0:8B16
+- (BOOL)highPriority;               // B16@0:8
 @end
 
 // Declared on a stand-in class so it cannot clash with CBPeripheral's public openL2CAPChannel:.

@@ -72,18 +72,58 @@ public final class StreamSession {
     public private(set) var negotiated: Negotiated?
 
     public var preferredSampleRate = 48000
-    /// Audio sent ahead into the headphones' buffer (MediaStreamer.cushionSeconds). The SIMGOT
-    /// EH500 holds writes for 100–300 ms several times a minute (2026-11-20), each heard as a
-    /// tear with the old 10 ms lead.
-    public static let cushionSeconds = 0.2
+    /// How far ahead of real time the streamer sends (MediaStreamer.cushionSeconds): 15 ms, what
+    /// CodecBlue measured as enough (LDAC's encoder looks ahead about 10 ms; notes 13.24), in line
+    /// with Android (20 ms encoder ticks) and PipeWire (no lead beyond the socket buffer). The
+    /// headphones' own buffer rides out link pauses, as with every other A2DP source, and what a
+    /// pause leaves behind is caught up afterwards (MediaStreamer.maxBacklogSeconds). Sending
+    /// 200 ms ahead (2026-11-20) relied on headphones accepting that much extra, which no A2DP
+    /// sink promises.
+    public static let cushionSeconds = 0.015
     public var cushionSeconds = StreamSession.cushionSeconds
     public var mode: BitrateController.Mode = .adaptive(ceiling: .kbps660) {
         didSet { streamer?.setMode(mode) }
     }
 
+    /// Experiment (2026-11-21): ask IOBluetooth for high priority on the headphones' link
+    /// (-[IOBluetoothDevice setHighPriority:], private) while streaming. Applies at once to a
+    /// running stream; otherwise from when the stream starts.
+    public var raisesPriority = false {
+        didSet {
+            guard raisesPriority != oldValue, streamer != nil else { return }
+            if raisesPriority { raisePriority() } else { restorePriority() }
+        }
+    }
+
+    /// The link's priority before we raised it (nil: not raised).
+    private var priorPriority: Int32?
+
+    private func raisePriority() {
+        guard priorPriority == nil else { return }
+        let before = device.highPriorityState
+        guard before >= 0 else { log.info("priority: setHighPriority not available"); return }
+        let after = device.setHighPriorityState(true)
+        priorPriority = before
+        log.info("priority: high priority \(before) -> \(after)")
+    }
+
+    private func restorePriority() {
+        guard let prior = priorPriority else { return }
+        let now = device.setHighPriorityState(prior == 1)
+        log.info("priority: high priority back to \(prior) (reads \(now))")
+        priorPriority = nil
+    }
+
     /// FIDELIS_AVRCP=1: try to hold AVRCP and drive the headphones' volume over it (see start).
     /// Otherwise their volume is lifted to 100% before the takeover (OutputRouter).
     nonisolated static let usesAVRCP = ProcessInfo.processInfo.environment["FIDELIS_AVRCP"] == "1"
+
+    /// Hold AVRCP and drive the headphones' own volume over it: possible when macOS's own AVRCP
+    /// is off (exclusive mode), or forced with FIDELIS_AVRCP=1.
+    public var holdsAVRCP = usesAVRCP
+
+    /// False for a retry after a lost stream (see Takeover.pagesHeadphones).
+    public var pagesHeadphones = true
 
     public init(device: FDBTDevice, helperPath: String, log: Log) {
         self.device = device; self.helperPath = helperPath; self.log = log
@@ -113,6 +153,7 @@ public final class StreamSession {
             self?.onPhase?(.takingOver(attempt: n))
         }
         takeover.isCancelled = { [weak self] in self?.stopping ?? true }
+        takeover.pagesHeadphones = pagesHeadphones
         let sig = try await takeover.acquireSignaling()
         signaling = sig
         try bailIfStopped()
@@ -123,7 +164,7 @@ public final class StreamSession {
         // 54 ms before our request), and the request then hangs until its timeout. Taking over in
         // place, which would leave AVRCP free, does not work on the SIMGOT EH500: it drops the
         // link itself about 1 s after macOS closes its profiles. FIDELIS_AVRCP=1 tries anyway.
-        let wantsAVRCP = Self.usesAVRCP
+        let wantsAVRCP = holdsAVRCP
         let avrcpOpen = Task { @MainActor [weak self] in wantsAVRCP ? await self?.openAVRCP() ?? nil : nil }
 
         onPhase?(.negotiating)
@@ -184,6 +225,7 @@ public final class StreamSession {
         }
         streamer = s
         s.start()
+        if raisesPriority { raisePriority() }
         onPhase?(.streaming)
         log.info("streaming LDAC to \(device.name)")
     }
@@ -266,7 +308,12 @@ public final class StreamSession {
         log.warn("session lost: \(why)")
         stopping = true
         Task { @MainActor in
-            await teardown(handBack: true)
+            // Switched off or out of range: the link goes within a moment, and paging them to
+            // hand them back would only time out (three times, about 50 s). macOS reconnects
+            // them itself when they are back.
+            _ = await waitFor(timeout: 1.5) { !device.isConnected }
+            if !device.isConnected { log.info("session lost: the link is down too; not handing back") }
+            await teardown(handBack: device.isConnected)
             onUnexpectedEnd?(why)
         }
     }
@@ -291,6 +338,7 @@ public final class StreamSession {
     }
 
     private func teardown(handBack: Bool = true) async {
+        restorePriority()
         streamer?.stop()
         streamer = nil
         source?.stop()

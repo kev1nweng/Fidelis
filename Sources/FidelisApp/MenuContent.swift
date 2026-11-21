@@ -13,12 +13,6 @@ struct MenuContent: View {
         Toggle("LDAC Output", isOn: Binding(get: { engine.status.isActive }, set: { _ in engine.toggle() }))
             .disabled(!engine.apiAvailable || engine.selectedAddress == nil || engine.status == .stopping)
 
-        // Right after hearing a dropout: a line in the log file to line it up with the stream's
-        // per-second statistics.
-        if engine.status == .streaming {
-            Button("Mark Glitch") { engine.log.warn("MARK: glitch heard just before this") }
-        }
-
         Divider()
 
         Menu("Headphones") {
@@ -44,6 +38,8 @@ struct MenuContent: View {
             }
             .pickerStyle(.inline)
             .labelsHidden()
+            Divider()
+            Toggle("High Connection Priority (Experimental)", isOn: $engine.highConnectionPriority)
         }
 
         Menu("Source") {
@@ -64,6 +60,10 @@ struct MenuContent: View {
             }
         }
         .disabled(engine.status.isActive)
+
+        // macOS's own Bluetooth audio is off while streaming (MacBluetoothAudio).
+        Toggle("Exclusive Mode", isOn: Binding(get: { engine.pausesMacAudio }, set: { engine.setPausesMacAudio($0) }))
+            .disabled(engine.macAudioBusy || engine.status.isActive)
 
         Divider()
 
