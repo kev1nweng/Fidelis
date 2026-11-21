@@ -107,7 +107,7 @@ public final class Engine: ObservableObject {
     private lazy var headphoneVolume = HeadphoneVolume(log: log)
     private lazy var softwareVolume = SoftwareVolume(log: log)
     private var sinkDelayUs: Int?
-    private var connectionWatch: FDBTConnectionWatch?
+    private var connectionWatch: HeadphonesReturnWatch?
 
     public init(helperPath: String) {
         self.helperPath = helperPath
@@ -410,12 +410,14 @@ public final class Engine: ObservableObject {
             self.sinkDelayUs = us
             self.updateLatency()
         }
-        s.onUnexpectedEnd = { [weak self] why in
+        s.onUnexpectedEnd = { [weak self] why, linkEnded in
             guard let self, self.session === s else { return }
             self.headphoneVolume.detach()
             self.softwareVolume.detach()
             self.session = nil
             self.stats = nil
+            // The link ended (switched off, out of range): stop, rather than retry.
+            if linkEnded, self.wantsStreaming { self.headphonesWentAway(address: address); return }
             // `why` is for the log (StreamSession logged it); the menu gets a plain sentence.
             self.recover(address: address, why: String(localized: "Connection lost"))
         }
@@ -478,15 +480,13 @@ public final class Engine: ObservableObject {
             status = .idle
             refreshDevices()
         }
-        connectionWatch = FDBTConnectionWatch { [weak self] connected in
-            MainActor.assumeIsolated {
-                guard let self, connected.caseInsensitiveCompare(address) == .orderedSame, !self.status.isActive,
-                      let device = FDBTDevice(address: address) else { return }
-                self.connectionWatch = nil
-                self.log.info("headphones: back; asking whether to stream again")
-                self.refreshDevices()
-                self.onHeadphonesReturned?(Headphones(address: address, name: device.name, connected: true))
-            }
+        connectionWatch?.stop()
+        connectionWatch = HeadphonesReturnWatch(address: address) { [weak self] in
+            guard let self, !self.status.isActive, let device = FDBTDevice(address: address) else { return }
+            self.connectionWatch = nil
+            self.log.info("headphones: back; asking whether to stream again")
+            self.refreshDevices()
+            self.onHeadphonesReturned?(Headphones(address: address, name: device.name, connected: true))
         }
     }
 

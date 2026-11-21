@@ -55,8 +55,9 @@ public final class StreamSession {
     public var onStats: ((MediaStreamer.Stats) -> Void)?
     /// The headphones' own playback delay (AVDTP delay report), in microseconds.
     public var onSinkDelay: ((Int) -> Void)?
-    /// The session ended without stop() being called (link loss, write failure).
-    public var onUnexpectedEnd: ((String) -> Void)?
+    /// The session ended without stop() being called (link loss, write failure). The flag is
+    /// true when the link itself ended (see lost).
+    public var onUnexpectedEnd: ((String, Bool) -> Void)?
 
     private var signaling: SignalingChannel?
     /// The headphones' AVRCP channel, if we got it (their own volume). Nil when macOS kept it.
@@ -158,7 +159,7 @@ public final class StreamSession {
         signaling = sig
         try bailIfStopped()
         sig.onSinkCommand = { [weak self] cmd in self?.sinkCommand(cmd) }
-        sig.onClose = { [weak self] in self?.lost("signaling channel closed") }
+        sig.onClose = { [weak self] in self?.lost("signaling channel closed", linkEnded: true) }
         // AVRCP (the headphones' own volume). Off by default: when the takeover reconnects the
         // link, bluetoothd opens its own AVRCP the instant the link is up (measured 2026-11-20,
         // 54 ms before our request), and the request then hangs until its timeout. Taking over in
@@ -218,7 +219,7 @@ public final class StreamSession {
             Task { @MainActor in
                 switch reason {
                 case .stopped: break
-                case .writeFailed(let e): self?.lost("media write failed: \(String(cString: strerror(e)))")
+                case .writeFailed(let e): self?.lost("media write failed: \(String(cString: strerror(e)))", linkEnded: true)
                 case .stalled(let secs): self?.lost("media link stalled for \(String(format: "%.1f", secs)) s")
                 }
             }
@@ -303,18 +304,26 @@ public final class StreamSession {
         }
     }
 
-    private func lost(_ why: String) {
+    /// `linkEnded`: our channels were closed under us (a socket error or EOF), which bluetoothd
+    /// does when the link itself ends: the headphones switched off, or went out of range. This
+    /// process's IOBluetooth can go on reporting them connected for a while after that
+    /// (2026-11-21: bluetoothd logged the disconnect at once, isConnected stayed true), so the
+    /// channels are the signal. A stall (writes held, channels open) is the link struggling.
+    private func lost(_ why: String, linkEnded: Bool = false) {
         guard !stopping else { return }
         log.warn("session lost: \(why)")
         stopping = true
         Task { @MainActor in
-            // Switched off or out of range: the link goes within a moment, and paging them to
-            // hand them back would only time out (three times, about 50 s). macOS reconnects
-            // them itself when they are back.
-            _ = await waitFor(timeout: 1.5) { !device.isConnected }
-            if !device.isConnected { log.info("session lost: the link is down too; not handing back") }
-            await teardown(handBack: device.isConnected)
-            onUnexpectedEnd?(why)
+            // Paging headphones that are gone to hand them back would only time out (three
+            // times, about 50 s); macOS reconnects them itself when they are back.
+            var ended = linkEnded
+            if !ended {
+                _ = await waitFor(timeout: 1.5) { !device.isConnected }
+                ended = !device.isConnected
+            }
+            if ended { log.info("session lost: the link ended; not handing back") }
+            await teardown(handBack: !ended)
+            onUnexpectedEnd?(why, ended)
         }
     }
 

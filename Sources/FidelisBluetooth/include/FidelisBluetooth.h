@@ -55,13 +55,6 @@ typedef NS_ENUM(long, FDBTOpenCode) {
                        completion:(void (^)(FDBTChannel *_Nullable channel, long code))completion;
 @end
 
-/// Watches for Bluetooth devices connecting (IOBluetooth's connect notifications, delivered on
-/// the main run loop). Keep the object for as long as you want the calls; it stops when released.
-@interface FDBTConnectionWatch : NSObject
-- (instancetype)initWithHandler:(void (^)(NSString *address))handler;
-- (instancetype)init NS_UNAVAILABLE;
-@end
-
 /// Entry point for the helper executable: opens `psm` on `address` and hands the socket to the
 /// parent over fd 3. Returns the process exit code.
 int FDBTHelperMain(NSString *address, uint16_t psm);

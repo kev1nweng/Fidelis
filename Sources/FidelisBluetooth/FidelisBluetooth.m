@@ -70,26 +70,6 @@ extern char **environ;
 }
 @end
 
-@implementation FDBTConnectionWatch {
-    void (^_handler)(NSString *);
-    IOBluetoothUserNotification *_note;
-}
-
-- (instancetype)initWithHandler:(void (^)(NSString *))handler {
-    if ((self = [super init])) {
-        _handler = [handler copy];
-        _note = [IOBluetoothDevice registerForConnectNotifications:self selector:@selector(connected:device:)];
-    }
-    return self;
-}
-
-- (void)connected:(IOBluetoothUserNotification *)note device:(IOBluetoothDevice *)device {
-    if (device.addressString) _handler(device.addressString);
-}
-
-- (void)dealloc { [_note unregister]; }
-@end
-
 @implementation FDBTDevice {
     IOBluetoothDevice *_dev;
     NSMutableSet *_waiters;
